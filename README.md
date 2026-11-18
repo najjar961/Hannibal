@@ -148,17 +148,24 @@ scope_expansion        5/5
 secret_exfil           5/5
 command_exec           5/5
 safety_bypass          4/4
-evasion                0/4
-OVERALL catch rate     36/40  (90%)
+obfuscation            4/4    ← defeated by the deobfuscation layer
+semantic_evasion       0/2    ← needs a model-based stage (documented gap)
+OVERALL catch rate     40/42  (95%)
 false-positive rate    0/31   (0%)
 ```
 
-The regex detector catches every *obvious* payload and zero benign banners — but
-it misses the 4 **obfuscated** ones (base64, homoglyphs, spacing, rot13), and
-that's the honest point: pattern matching can't catch encoded injection. Closing
-that gap needs a semantic second stage (a classifier or the model itself judging
-intent), which is on the roadmap. Keeping the evasions in the corpus keeps the
-score honest instead of a suspicious 100%.
+**Deobfuscation layer.** Regex alone is beaten by mechanical obfuscation, so the
+scanner *normalizes before it matches*: it base64-decodes long tokens, folds
+Cyrillic/Greek homoglyphs to ASCII, collapses letter-spacing (`i g n o r e`),
+and rot13-decodes, then runs the patterns over every view. That catches all four
+obfuscated payloads with zero new false positives.
+
+What it still misses — honestly — are the 2 **semantic** evasions: a paraphrase
+with no trigger words, and the same attack in German. No amount of normalization
+helps there; catching those needs a model-based second stage (a classifier, or
+the planning model itself judging intent), which is the next roadmap item.
+Keeping those misses in the corpus keeps the score honest instead of a hollow
+100%.
 
 ---
 
@@ -217,7 +224,8 @@ tests/test_safety.py   control tests
 - [x] Per-tool output parsers for real `nmap -oX`, `httpx -json`
 - [x] Red-team the injection layer with a payload corpus and measure catch + false-positive rate
 - [x] Coverage guard so a weak model can't stop before full recon depth
-- [ ] Semantic (model-based) second stage to catch obfuscated injection the regex misses
+- [x] Deobfuscation layer (base64 / homoglyph / spacing / rot13) to beat mechanical evasion
+- [ ] Semantic (model-based) second stage for paraphrase / multilingual evasion the patterns can't reach
 - [ ] Findings dedup + "which clue led to which" edges surfaced in the report
 - [ ] Add real HTB/THM boxes to the benchmark lab and compare mock vs local-model planning
 

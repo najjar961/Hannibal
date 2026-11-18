@@ -16,6 +16,8 @@ Two mechanisms:
 """
 from __future__ import annotations
 
+import base64
+import codecs
 import re
 from dataclasses import dataclass, field
 from typing import List
@@ -29,7 +31,8 @@ _CATEGORY_PATTERNS = [
     ("instruction_override", re.compile(
         r"\b(ignore|disregard|forget|override|do not follow)\b.{0,30}"
         r"(all |any |your |the |previous |prior |above |earlier )*"
-        r"(instruction|objective|prompt|rule|directive|task|context)", re.I)),
+        r"(instruction|objective|prompt|rule|directive|task|context|"
+        r"scope|safety|guardrail|restriction)", re.I)),
     ("role_injection", re.compile(
         r"(you are now|you're now|from now on you|act as|pretend to be|"
         r"roleplay as|new (instruction|task|objective|system)s?\s*:|"
@@ -72,15 +75,69 @@ class ScanResult:
     categories: List[str] = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Deobfuscation layer.
+#
+# Regex alone is defeated by mechanical obfuscation: base64, homoglyphs, letter
+# spacing, rot13. Rather than try to write patterns for every encoding, we
+# NORMALIZE first — produce decoded/folded views of the text — and run the same
+# patterns over each view. This defeats the mechanical evasions. What it does
+# NOT defeat is semantic evasion (paraphrase, other languages); that needs a
+# model-based stage, and the corpus keeps those as documented misses.
+# ---------------------------------------------------------------------------
+
+# common Cyrillic/Greek lookalikes → ASCII
+_HOMOGLYPHS = {
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x",
+    "і": "i", "ѕ": "s", "ԁ": "d", "ј": "j", "к": "k", "м": "m", "н": "h",
+    "т": "t", "в": "b", "А": "A", "Е": "E", "О": "O", "Р": "P", "С": "C",
+    "Х": "X", "І": "I", "ο": "o", "α": "a", "ε": "e", "ρ": "p", "ν": "v",
+    "ι": "i", "κ": "k", "μ": "m", "τ": "t", "у".upper(): "Y",
+}
+_HOMO_TABLE = {ord(k): v for k, v in _HOMOGLYPHS.items()}
+
+# a space between two single-letter tokens (letter-spacing obfuscation)
+_DESPACE = re.compile(r"(?<=\b\w)\s(?=\w\b)")
+# a run long enough to plausibly be base64-encoded text
+_B64_TOKEN = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
+
+
+def _variants(text: str) -> List[str]:
+    """Normalized views of the text. The original is always included."""
+    out = [text]
+    folded = text.translate(_HOMO_TABLE)
+    if folded != text:
+        out.append(folded)
+    despaced = _DESPACE.sub("", folded)
+    if despaced != folded:
+        out.append(despaced)
+    try:
+        out.append(codecs.encode(text, "rot_13"))
+    except Exception:
+        pass
+    for tok in _B64_TOKEN.findall(text):
+        try:
+            dec = base64.b64decode(tok + "=" * (-len(tok) % 4)).decode("utf-8", "ignore")
+        except Exception:
+            continue
+        # keep only decodings that look like text, so random tokens don't add noise
+        if len(dec) >= 4 and sum(c.isprintable() for c in dec) >= len(dec) * 0.8:
+            out.append(dec)
+    return out
+
+
 def scan(text: str) -> ScanResult:
     hits: List[str] = []
     cats: List[str] = []
+    variants = _variants(text or "")
     for category, pat in _CATEGORY_PATTERNS:
-        m = pat.search(text or "")
-        if m:
-            hits.append(m.group(0).strip()[:80])
-            if category not in cats:
-                cats.append(category)
+        for v in variants:
+            m = pat.search(v)
+            if m:
+                hits.append(m.group(0).strip()[:80])
+                if category not in cats:
+                    cats.append(category)
+                break   # one hit per category is enough
     return ScanResult(bool(hits), hits, cats)
 
 
