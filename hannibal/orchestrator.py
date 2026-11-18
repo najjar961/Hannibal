@@ -132,7 +132,7 @@ class Orchestrator:
             self.audit.record("commander_plan", round=rnd, done=plan.done,
                               reason=plan.reason,
                               objectives=[o.goal for o in plan.objectives])
-            self._log(f"\n[round {rnd}] commander: {plan.reason}")
+            self._log(f"\n[round {rnd}] Commander: {plan.reason}")
             if plan.done:
                 self.stopped_reason = "objective complete"
                 break
@@ -140,7 +140,7 @@ class Orchestrator:
             # generals -> commands
             specs: List[CommandSpec] = []
             for obj in plan.objectives:
-                self._log(f"  general ▸ {obj.goal}")
+                self._log(f"  General ▸ {obj.goal}")
                 specs.extend(self.brain.decompose(obj.goal, findings, cfg.scope))
             self.budget.add_tokens(self.brain.tokens_used() - self.budget.state().tokens)
 
