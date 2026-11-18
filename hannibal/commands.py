@@ -150,6 +150,23 @@ def _simulate(spec: CommandSpec) -> str:
     return f"[simulated] {line}\n(no notable output)"
 
 
+def _with_structured_output(spec: CommandSpec) -> List[str]:
+    """Add machine-readable output flags so real runs parse cleanly.
+
+    nmap -> XML on stdout; httpx -> JSON lines. These flags are already on the
+    allowlist; adding them here means the brain never has to remember to.
+    """
+    args = list(spec.args)
+    if spec.binary == "nmap" and "-oX" not in args:
+        args += ["-oX", "-"]
+    if spec.binary == "httpx":
+        if "-json" not in args:
+            args.append("-json")
+        if "-silent" not in args:
+            args.append("-silent")
+    return args
+
+
 def run(spec: CommandSpec, execute: bool, timeout: int) -> str:
     """Run (or simulate) an already scope-approved, validated command."""
     if not execute:
@@ -158,7 +175,7 @@ def run(spec: CommandSpec, execute: bool, timeout: int) -> str:
         return f"[skipped] {spec.binary} not installed on this host"
     try:
         proc = subprocess.run(
-            [spec.binary, *spec.args],
+            [spec.binary, *_with_structured_output(spec)],
             capture_output=True, text=True, timeout=timeout, shell=False,
         )
         out = (proc.stdout or "") + (proc.stderr or "")

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import List, Protocol
+from typing import List, Optional, Protocol
 
 from .types import Plan, GeneralObjective, CommandSpec, Finding
 from .injection import quarantine, SYSTEM_GUARDRAIL
@@ -107,6 +107,41 @@ def rule_decompose(goal: str, findings: List[Finding],
         ]
     # unknown goal -> safe no-op discovery
     return [CommandSpec("nmap", ["-sn", host], [host], "fallback liveness check")]
+
+
+# ---------------------------------------------------------------------------
+# Coverage guard — the fix for weak models that quit early.
+#
+# On a first live run, a small local model found the hosts, declared "all
+# objectives met", and stopped before scanning a single port. The Commander's
+# judgement was the weak link, not the tool. coverage_next() is the backstop:
+# the orchestrator calls it whenever a Commander says "done", and overrides a
+# premature stop until the standard recon depth (hosts -> ports -> services ->
+# web) is actually reached. A strong model can still do MORE than the floor; it
+# just can't do LESS. The budget caps the upper end, so this can't loop forever.
+# ---------------------------------------------------------------------------
+def coverage_next(findings: List[Finding]) -> Optional[GeneralObjective]:
+    """The next mandatory recon phase, or None if the standard depth is covered."""
+    p = rule_plan("", findings)
+    return p.objectives[0] if not p.done else None
+
+
+def _phase_satisfied(goal: str, specs: List[CommandSpec]) -> bool:
+    """Do these commands actually advance the phase the objective names?
+
+    Guards against a model that returns valid-but-useless commands (e.g. a bare
+    `nmap <ip>` with no scan type) that would never produce the findings the
+    phase needs.
+    """
+    g = goal.lower()
+    joined = " ".join(s.as_cmdline() for s in specs)
+    if "service" in g:
+        return "-sV" in joined
+    if "web" in g:
+        return any(s.binary in ("httpx", "whatweb") for s in specs) or "http-title" in joined
+    if "discovery" in g or "host and port" in g:
+        return "-p-" in joined or "--top-ports" in joined or "-sn" in joined
+    return bool(specs)
 
 
 class MockBrain:
@@ -203,7 +238,16 @@ class LLMBrain:
                     [str(t) for t in c.get("targets", [])],
                     str(c.get("rationale", "")),
                 ))
-            return specs or rule_decompose(goal, findings, scope)
+            if not specs:
+                return rule_decompose(goal, findings, scope)
+            # rules as a floor: if the model's commands don't actually advance
+            # this phase, add the standard ones for it (keeping the model's extras)
+            if not _phase_satisfied(goal, specs):
+                have = {s.as_cmdline() for s in specs}
+                for rc in rule_decompose(goal, findings, scope):
+                    if rc.as_cmdline() not in have:
+                        specs.append(rc)
+            return specs
         except Exception:
             return rule_decompose(goal, findings, scope)
 

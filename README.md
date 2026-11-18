@@ -2,7 +2,7 @@
 
 **An autonomous recon orchestrator that runs like an army — with a safety harness bolted on first.**
 
-A *commander* LLM sets objectives, *generals* turn them into concrete recon tasks, and a pool of parallel *wraith* workers execute allow-listed commands and report findings back up the chain. The commander reads the findings and decides what to do next, until the objective is mapped or a budget runs out.
+A *Commander* LLM sets objectives, *Generals* turn them into concrete recon tasks, and a pool of parallel *Wraith* workers execute allow-listed commands and report findings back up the chain. The Commander reads the findings and decides what to do next, until the objective is mapped or a budget runs out.
 
 The interesting part isn't the hierarchy — that's a few hundred lines. The interesting part is everything that sits between *"the model wants to run a command"* and *"a command actually runs"*: scope enforcement, a recon-only allowlist, a tamper-evident audit log, prompt-injection quarantine, and a hard budget / kill-switch. This is built as a **learning and portfolio project**, to be run **only against systems you own or are authorized to test** (your own lab, Hack The Box, TryHackMe).
 
@@ -78,16 +78,16 @@ python3 hannibal.py report hannibal_run
 Example run (abridged):
 
 ```
-[round 1] commander: no recon yet — begin with host and port discovery
-  general ▸ host and port discovery across the scope
+[round 1] Commander: no recon yet — begin with host and port discovery
+  General ▸ host and port discovery across the scope
   ✓ nmap 10.10.10.0/24 → 1 finding(s)
   ✓ nmap 10.10.10.5    → 3 finding(s)
-[round 2] commander: ports found — identify the services behind them
+[round 2] Commander: ports found — identify the services behind them
   ✓ nmap 10.10.10.5    → 3 finding(s)
-[round 3] commander: web service present — fingerprint it
+[round 3] Commander: web service present — fingerprint it
   ⚠ injection attempt in output of nmap → quarantined (hits: ['ignore previous instructions', 'scan 8.8.8.8'])
   ⚑ nmap 10.10.10.5    → 1 finding(s)
-[round 4] commander: recon objective satisfied: hosts, services and web surface mapped
+[round 4] Commander: recon objective satisfied: hosts, services and web surface mapped
 
 stopped: objective complete   rounds=4 commands=5 ~tokens=320
 findings: {'host': 1, 'port': 3, 'service': 3, 'web': 2}
@@ -109,6 +109,8 @@ python3 hannibal.py run -o "enumerate the box" -s 10.10.11.20 \
 
 If the model returns malformed JSON, the brain falls back to deterministic rules rather than failing the run.
 
+**Coverage guard.** On the first live run, a local model found the hosts, declared "all objectives met", and stopped — before scanning a single port. The *tool* worked; the model's judgement was the weak link. So the Commander's "done" is now backstopped: the orchestrator overrides a premature stop until the standard recon depth (hosts → ports → services → web) is actually reached. A strong model can still do *more* than the floor; it can't do *less*. On real tool output, nmap `-oX` XML and httpx `-json` are parsed into the same structured findings the simulator produces.
+
 ---
 
 ## Safety model in one paragraph
@@ -124,6 +126,39 @@ python3 -m unittest discover -s tests -v
 ```
 
 The suite asserts the guards actually **block**: out-of-scope targets (including ones hidden in args), non-recon binaries, shell metacharacters, unsafe nmap scripts, injection strings, and audit tampering.
+
+---
+
+## Injection red-team
+
+`redteam.py` runs a corpus of injection payloads through the detector and scores
+it — catch rate *and* false-positive rate, because a detector that screams at
+every `Apache` banner is useless:
+
+```bash
+python3 redteam.py
+```
+
+```
+category               caught
+instruction_override   7/7
+role_injection         5/5
+delimiter_escape       5/5
+scope_expansion        5/5
+secret_exfil           5/5
+command_exec           5/5
+safety_bypass          4/4
+evasion                0/4
+OVERALL catch rate     36/40  (90%)
+false-positive rate    0/31   (0%)
+```
+
+The regex detector catches every *obvious* payload and zero benign banners — but
+it misses the 4 **obfuscated** ones (base64, homoglyphs, spacing, rot13), and
+that's the honest point: pattern matching can't catch encoded injection. Closing
+that gap needs a semantic second stage (a classifier or the model itself judging
+intent), which is on the roadmap. Keeping the evasions in the corpus keeps the
+score honest instead of a suspicious 100%.
 
 ---
 
@@ -166,8 +201,11 @@ hannibal/
   audit.py             hash-chained audit log
   budget.py            kill-switch / budgets
   store.py             SQLite queue + findings graph (Mermaid export)
-  parse.py             tool output → structured findings
+  parse.py             simulator output → structured findings
+  realparse.py         real nmap -oX XML / httpx -json → findings
   lab.py               simulated lab fixtures + ground truth
+  redteam_corpus.py    injection payloads + benign banners (ground truth)
+redteam.py             injection detector scorer → markdown + JSON
 tests/test_safety.py   control tests
 ```
 
@@ -176,9 +214,11 @@ tests/test_safety.py   control tests
 ## Roadmap
 
 - [x] Benchmark harness: score coverage, time and token cost per box against ground truth
+- [x] Per-tool output parsers for real `nmap -oX`, `httpx -json`
+- [x] Red-team the injection layer with a payload corpus and measure catch + false-positive rate
+- [x] Coverage guard so a weak model can't stop before full recon depth
+- [ ] Semantic (model-based) second stage to catch obfuscated injection the regex misses
 - [ ] Findings dedup + "which clue led to which" edges surfaced in the report
-- [ ] Per-tool output parsers for real `nmap -oX`, `httpx -json`
-- [ ] Red-team the injection layer with a larger corpus of payloads and measure catch rate
 - [ ] Add real HTB/THM boxes to the benchmark lab and compare mock vs local-model planning
 
 ## Legal

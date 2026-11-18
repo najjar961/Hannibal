@@ -21,12 +21,12 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
 from .config import RunConfig
-from .types import CommandSpec, Finding
+from .types import CommandSpec, Finding, Plan
 from .audit import AuditLog
 from .budget import Budget
 from .scope import ScopeGuard
 from .store import Store, to_mermaid
-from .brain import Brain, MockBrain, LLMBrain
+from .brain import Brain, MockBrain, LLMBrain, coverage_next
 from .llm import LLMClient
 from . import commands as cmd
 from .parse import parse
@@ -129,6 +129,18 @@ class Orchestrator:
 
             plan = self.brain.plan(cfg.objective, findings)
             self.budget.add_tokens(self.brain.tokens_used() - self.budget.state().tokens)
+
+            # coverage guard: a weak model can declare victory too early. If it
+            # says done but the standard recon depth isn't reached, override and
+            # keep going. (A strong model can still exceed the floor.)
+            if plan.done:
+                gap = coverage_next(findings)
+                if gap is not None:
+                    self.audit.record("coverage_guard", round=rnd,
+                                      overrode_done=True, forced=gap.goal)
+                    plan = Plan(False, f"coverage guard — {gap.goal} still pending",
+                                [gap])
+
             self.audit.record("commander_plan", round=rnd, done=plan.done,
                               reason=plan.reason,
                               objectives=[o.goal for o in plan.objectives])

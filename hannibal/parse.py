@@ -12,6 +12,7 @@ from typing import List
 
 from .types import CommandSpec, Finding
 from .injection import scan
+from . import realparse
 
 _HOST_UP = re.compile(r"Nmap scan report for (\S+)")
 # [ \t] rather than \s so the version group never swallows the next line
@@ -20,8 +21,15 @@ _WEB = re.compile(r"https?://(\S+)[ \t]+\[(\d{3})\][ \t]+\[([^\]]*)\]")
 
 
 def parse(spec: CommandSpec, output: str, task_id: int) -> List[Finding]:
+    # real structured output first (from --execute). The simulator emits text,
+    # which falls through to the regex parsing below.
+    sr = scan(output)
+    if realparse.looks_like_nmap_xml(output):
+        return realparse.parse_nmap_xml(output, task_id), sr
+    if realparse.looks_like_httpx_json(output):
+        return realparse.parse_httpx_json(output, task_id), sr
+
     findings: List[Finding] = []
-    sr = scan(output)                      # one scan; applied to web-ish findings
     host = (spec.targets or ["target"])[0]
 
     # host liveness
