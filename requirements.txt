@@ -1,0 +1,3 @@
+# Hannibal has NO third-party dependencies — Python 3.8+ standard library only.
+# A real model backend just needs an OpenAI-compatible endpoint reachable over
+# HTTP (Ollama, LM Studio, DeepSeek, OpenAI); no SDK required.
