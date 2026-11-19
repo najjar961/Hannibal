@@ -322,6 +322,81 @@ class TestFindingsProvenance(unittest.TestCase):
         self.assertTrue(f.suspicious)
 
 
+class TestAttackSurfaceAnalysis(unittest.TestCase):
+    def _svc(self, name, ver, port, host="10.0.0.9"):
+        return Finding("service", f"{host}:{port}", f"{name} — {ver}",
+                       {"port": port, "service": name, "version": ver}, 1, host)
+
+    def test_version_cve_matched(self):
+        from hannibal.analysis import analyze
+        w = analyze([self._svc("ftp", "vsftpd 2.3.4", 21)])
+        self.assertTrue(any(x.cve == "CVE-2011-2523" for x in w))
+        self.assertEqual(w[0].severity, "critical")
+
+    def test_protocol_exposure_without_version(self):
+        from hannibal.analysis import analyze
+        w = analyze([self._svc("telnet", "", 23)])
+        self.assertTrue(any("Telnet" in x.title for x in w))
+
+    def test_sorted_most_severe_first(self):
+        from hannibal.analysis import analyze
+        w = analyze([self._svc("rpcbind", "", 111),       # low
+                     self._svc("ftp", "vsftpd 2.3.4", 21)])  # critical
+        self.assertEqual(w[0].severity, "critical")
+
+    def test_no_false_positive_on_modern_services(self):
+        from hannibal.analysis import analyze
+        w = analyze([self._svc("ssh", "OpenSSH 9.6p1", 22),
+                     self._svc("http", "nginx 1.24.0", 80)])
+        self.assertEqual(w, [])
+
+    def test_weakness_deduped_per_host_port(self):
+        from hannibal.analysis import analyze
+        w = analyze([self._svc("ftp", "vsftpd 2.3.4", 21),
+                     self._svc("ftp", "vsftpd 2.3.4", 21)])
+        self.assertEqual(len(w), 1)
+
+    def test_analysis_never_emits_exploit_text(self):
+        # the layer is advisory: notes must not contain actionable payload/exploit steps
+        from hannibal.analysis import _SIGNATURES
+        banned = ("msfconsole", "exploit/", "payload", "reverse shell", "nc -e",
+                  "curl http", "wget http")
+        for sig in _SIGNATURES:
+            low = sig.note.lower()
+            for b in banned:
+                self.assertNotIn(b, low)
+
+
+class TestConvergenceGuard(unittest.TestCase):
+    def test_stuck_phase_converges_before_budget(self):
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        from hannibal.types import Plan, GeneralObjective
+
+        class StuckBrain:  # always asks for the same phase, never makes progress
+            def plan(self, objective, findings):
+                return Plan(False, "stuck", [GeneralObjective(
+                    "service and version enumeration on 10.0.0.9", "x")])
+            def decompose(self, goal, findings, scope):
+                return []                       # emits no command -> no new finding
+            def tokens_used(self):
+                return 0
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg = RunConfig(objective="map", scope=["10.0.0.9"], backend="mock",
+                            quiet=True, workdir=d, max_rounds=6, max_phase_attempts=2)
+            orch = Orchestrator(cfg)
+            orch.brain = StuckBrain()
+            orch.run()
+            self.assertIn("converged", orch.stopped_reason)
+            self.assertLess(orch.final_state.rounds, 6)      # stopped before budget
+            from hannibal.store import Store
+            s = Store(cfg.db_path)
+            notes = [f for f in s.all_findings() if f.kind == "note"]
+            s.close()
+            self.assertTrue(notes)                           # inconclusive phase logged
+
+
 class TestRealBoxBenchmark(unittest.TestCase):
     def test_load_boxes_from_json(self):
         from hannibal.lab import load_boxes

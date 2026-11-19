@@ -90,6 +90,9 @@ hannibal run \
 hannibal verify-audit hannibal_run
 hannibal report hannibal_run
 hannibal report hannibal_run --html   # shareable HTML scan report
+
+# think like a pentester: map discovered services to known weaknesses (advisory)
+hannibal analyze hannibal_run
 ```
 
 (Not installed? Swap `hannibal` for `python hannibal.py` in any command below.)
@@ -313,6 +316,30 @@ box              ports   recall  svc    web   rounds  cmds   secs
 Every open port discovered, 23 of 24 services versioned, converging on its own
 in 5 rounds — no human in the loop.
 
+## Attack-surface analysis
+
+Recon tells you *what's there*; the next question a pentester asks is *what's
+weak*. `hannibal analyze <run>` reads the discovered services and maps each one
+to publicly-known weaknesses — a version-specific CVE, a cleartext protocol, a
+service that shouldn't be reachable:
+
+```
+ATTACK-SURFACE ANALYSIS (advisory — verify manually)
+5 critical · 6 high · 3 medium
+CRITICAL  10.10.10.9:21    vsftpd 2.3.4 backdoor                 [CVE-2011-2523]
+CRITICAL  10.10.10.9:445   Samba 'username map script' injection [CVE-2007-2447]
+CRITICAL  10.10.10.9:3632  distccd remote command execution      [CVE-2004-2687]
+HIGH      10.10.10.9:23    Cleartext Telnet exposed
+MEDIUM    10.10.10.9:22    OpenSSH username enumeration           [CVE-2018-15473]
+```
+
+The same severity-ranked table appears in the HTML report, with NVD reference
+links. This layer is **read-only and advisory by design** — it names the
+weakness and points at a public reference, but ships no exploit, payload, or
+step-by-step. Every hit is a lead to confirm by hand, under authorization. It
+keeps Hannibal firmly on the recon side of the line while still showing it can
+reason about what recon *means*.
+
 ## Project layout
 
 ```
@@ -321,7 +348,8 @@ hannibal.py            thin shim so `python hannibal.py` still works
 benchmark.py           benchmark harness → markdown + JSON scorecard
 targets.example.json   template for real HTB/THM boxes (`--targets`)
 hannibal/
-  cli.py               argparse CLI (run / verify-audit / report)
+  cli.py               argparse CLI (run / verify-audit / report / analyze)
+  analysis.py          read-only service → known-weakness mapping
   orchestrator.py      round loop + parallel workers
   brain.py             MockBrain (deterministic) + LLMBrain (real model)
   scope.py             scope enforcement
@@ -355,6 +383,7 @@ tests/test_safety.py   control tests
 - [x] Map every injection attack class to its OWASP LLM Top 10 (2025) risk
 - [x] Findings dedup + "which clue led to which" edges surfaced in the report
 - [x] Benchmark against real HTB/THM boxes via a JSON ground-truth file (`--targets`)
+- [x] Attack-surface analysis: map discovered services to known weaknesses (advisory)
 
 ## Legal
 

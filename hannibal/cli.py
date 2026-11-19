@@ -95,6 +95,38 @@ def cmd_report(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_analyze(a: argparse.Namespace) -> int:
+    import os
+    from .store import Store
+    from .analysis import analyze, summarize
+    db = os.path.join(a.path, "hannibal.sqlite")
+    if not os.path.exists(db):
+        print(f"no run found at {db}", file=sys.stderr)
+        return 1
+    store = Store(db)
+    weaknesses = analyze(store.all_findings())
+    store.close()
+
+    if not weaknesses:
+        print("No known weaknesses matched the discovered services.")
+        return 0
+
+    counts = summarize(weaknesses)
+    head = " · ".join(f"{counts[s]} {s}" for s in
+                      ("critical", "high", "medium", "low", "info") if counts[s])
+    print(f"\nATTACK-SURFACE ANALYSIS (advisory — verify manually)\n" + "─" * 60)
+    print(head + "\n" + "─" * 60)
+    for w in weaknesses:
+        ref = f"  [{w.cve}]" if w.cve else ""
+        print(f"{w.severity.upper():8} {w.host}:{w.port:<6} {w.title}{ref}")
+        print(f"         ↳ {w.evidence}")
+        print(f"         ↳ {w.note}")
+    print("─" * 60)
+    print("Leads only — each must be confirmed by hand, under authorization. "
+          "No exploit steps are provided.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="hannibal", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -133,6 +165,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="write a self-contained HTML report (default: "
                           "<run>/report.html)")
     rep.set_defaults(func=cmd_report)
+
+    an = sub.add_parser("analyze",
+                        help="map discovered services to known weaknesses (advisory)")
+    an.add_argument("path", help="run directory")
+    an.set_defaults(func=cmd_analyze)
     return p
 
 

@@ -69,6 +69,28 @@ def build_html(workdir: str) -> str:
     suspicious_n = sum(1 for f in findings if f.suspicious)
     mermaid = to_mermaid(findings)
 
+    # attack-surface analysis (read-only, advisory)
+    from .analysis import analyze, summarize
+    weaknesses = analyze(findings)
+    wcounts = summarize(weaknesses)
+    wrows = []
+    for w in weaknesses:
+        cve = (f'<a href="https://nvd.nist.gov/vuln/detail/{html.escape(w.cve)}" '
+               f'target="_blank" rel="noopener">{html.escape(w.cve)}</a>') if w.cve else "—"
+        wrows.append(
+            f'<tr><td><span class="sev sev--{w.severity}">{w.severity}</span></td>'
+            f'<td class="mono">{html.escape(w.host)}:{w.port}</td>'
+            f'<td>{html.escape(w.title)}<div class="note">{html.escape(w.note)}</div></td>'
+            f'<td class="mono">{cve}</td></tr>')
+    wtable = "\n".join(wrows)
+    wsummary = " · ".join(f"{wcounts[s]} {s}" for s in
+                          ("critical", "high", "medium", "low", "info") if wcounts[s])
+    weakness_section = ("" if not weaknesses else f"""
+  <h2>Attack surface <span class="muted">— {html.escape(wsummary)} · advisory, verify manually</span></h2>
+  <table><tr><th>severity</th><th>host</th><th>weakness</th><th>reference</th></tr>
+  {wtable}
+  </table>""")
+
     # findings table
     rows = []
     for f in sorted(findings, key=lambda x: (_KIND_ORDER.get(x.kind, 9), x.target)):
@@ -148,6 +170,16 @@ def build_html(workdir: str) -> str:
   .kind--web{{color:#d29922}} .kind--service{{color:#a371f7}}
   .graph{{background:var(--panel);border:1px solid var(--line);border-radius:10px;
     padding:18px;overflow:auto}}
+  .sev{{font-family:ui-monospace,monospace;font-size:11px;padding:2px 8px;
+    border-radius:5px;text-transform:uppercase;letter-spacing:.5px;font-weight:700}}
+  .sev--critical{{background:#3d0f12;color:#ff6b6b;border:1px solid #a33}}
+  .sev--high{{background:#3a230d;color:#ff9d4d;border:1px solid #a63}}
+  .sev--medium{{background:#3a360d;color:#e3c93a;border:1px solid #883}}
+  .sev--low{{background:#12263a;color:#4da3ff;border:1px solid #358}}
+  .sev--info{{background:#1b2330;color:var(--dim);border:1px solid #333}}
+  .note{{color:var(--dim);font-size:12px;margin-top:3px}}
+  .muted{{color:var(--dim);font-size:12px;font-weight:400}}
+  a{{color:var(--teal)}}
   .foot{{color:var(--dim);font-size:12px;margin-top:28px;border-top:1px solid var(--line);
     padding-top:14px}}
 </style></head>
@@ -162,6 +194,7 @@ def build_html(workdir: str) -> str:
     {_stat("commands", meta["commands"])}
     {_stat("~tokens", meta["tokens"])}
     {_stat("findings", sum(counts.values()))}
+    {_stat("weaknesses", len(weaknesses), accent=len(weaknesses) > 0)}
     {_stat("quarantined", suspicious_n, accent=suspicious_n > 0)}
   </div>
 
@@ -169,7 +202,7 @@ def build_html(workdir: str) -> str:
   <table><tr><th>kind</th><th>target</th><th>detail</th></tr>
   {table}
   </table>
-
+{weakness_section}
   <h2>Provenance graph</h2>
   <div class="graph"><pre class="mermaid">{html.escape(mermaid)}</pre></div>
 
