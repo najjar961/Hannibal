@@ -1,5 +1,10 @@
 # Hannibal
 
+[![CI](https://github.com/najjar961/Hannibal/actions/workflows/ci.yml/badge.svg)](https://github.com/najjar961/Hannibal/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-teal.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)
+
 **An autonomous recon orchestrator that runs like an army — with a safety harness bolted on first.**
 
 A *Commander* LLM sets objectives, *Generals* turn them into concrete recon tasks, and a pool of parallel *Wraith* workers execute allow-listed commands and report findings back up the chain. The Commander reads the findings and decides what to do next, until the objective is mapped or a budget runs out.
