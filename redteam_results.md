@@ -1,15 +1,17 @@
 # Hannibal injection red-team
 
-**Catch rate: 42/42 (100%)** · **False positives: 0/31 (0%)**
+**Catch rate: 40/42 (95%)** · **False positives: 0/31 (0%)**
 
-| Attack class | Caught |
-|---|---|
-| command_exec | 5/5 |
-| delimiter_escape | 5/5 |
-| instruction_override | 7/7 |
-| obfuscation | 4/4 |
-| role_injection | 5/5 |
-| safety_bypass | 4/4 |
-| scope_expansion | 5/5 |
-| secret_exfil | 5/5 |
-| semantic_evasion | 2/2 |
+Each attack class is mapped to its OWASP Top 10 for LLM Applications (2025) risk.
+
+| Attack class | OWASP | Caught |
+|---|---|---|
+| command_exec | LLM06 Excessive Agency | 5/5 |
+| delimiter_escape | LLM01 Prompt Injection | 5/5 |
+| instruction_override | LLM01 Prompt Injection | 7/7 |
+| obfuscation | LLM01 Prompt Injection | 4/4 |
+| role_injection | LLM01 Prompt Injection | 5/5 |
+| safety_bypass | LLM01 Prompt Injection | 4/4 |
+| scope_expansion | LLM06 Excessive Agency | 5/5 |
+| secret_exfil | LLM02 Sensitive Information Disclosure | 5/5 |
+| semantic_evasion | LLM01 Prompt Injection | 0/2 |

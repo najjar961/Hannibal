@@ -195,19 +195,24 @@ python3 redteam.py
 ```
 
 ```
-category               caught
-instruction_override   7/7
-role_injection         5/5
-delimiter_escape       5/5
-scope_expansion        5/5
-secret_exfil           5/5
-command_exec           5/5
-safety_bypass          4/4
-obfuscation            4/4    ← defeated by the deobfuscation layer
-semantic_evasion       0/2    ← needs a model-based stage (documented gap)
-OVERALL catch rate     40/42  (95%)
-false-positive rate    0/31   (0%)
+attack class           OWASP     caught
+instruction_override   LLM01       7/7
+role_injection         LLM01       5/5
+delimiter_escape       LLM01       5/5
+safety_bypass          LLM01       4/4
+obfuscation            LLM01       4/4    ← defeated by the deobfuscation layer
+semantic_evasion       LLM01       0/2    ← needs a model-based stage (documented gap)
+secret_exfil           LLM02       5/5
+scope_expansion        LLM06       5/5
+command_exec           LLM06       5/5
+OVERALL catch rate                 40/42  (95%)
+false-positive rate                0/31   (0%)
 ```
+
+Every attack class is mapped to its [OWASP Top 10 for LLM Applications (2025)](https://genai.owasp.org/llm-top-10/)
+risk — **LLM01** Prompt Injection, **LLM02** Sensitive Information Disclosure,
+**LLM06** Excessive Agency — so the results speak the taxonomy security teams
+already use.
 
 **Deobfuscation layer.** Regex alone is beaten by mechanical obfuscation, so the
 scanner *normalizes before it matches*: it base64-decodes long tokens, folds
