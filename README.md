@@ -302,6 +302,17 @@ a like-for-like number for how much of a real box's surface Hannibal discovers
 on its own. **Only scan boxes you're explicitly authorized to**; HTB and THM
 authorize their own machines, and nothing else is in scope.
 
+Validated live against a **Metasploitable 2** VM (24 open services) on an
+isolated lab network — [`metasploitable_results.md`](metasploitable_results.md):
+
+```
+box              ports   recall  svc    web   rounds  cmds   secs
+192.168.49.129   24/24   1.0     0.96   ✓     5       5      134.78
+```
+
+Every open port discovered, 23 of 24 services versioned, converging on its own
+in 5 rounds — no human in the loop.
+
 ## Project layout
 
 ```
