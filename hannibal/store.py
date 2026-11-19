@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS findings (
     kind TEXT, target TEXT, summary TEXT, data TEXT,
     source_task INTEGER, parent_target TEXT, suspicious INTEGER DEFAULT 0, ts REAL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ux_findings ON findings(kind, target);
 """
 
 
@@ -76,15 +77,40 @@ class Store:
 
     # -- findings -----------------------------------------------------------
     def add_finding(self, f: Finding) -> int:
+        """Insert a finding, deduped by (kind, target).
+
+        Re-running the same scan is routine in recon, so a blind INSERT would
+        pile up identical rows and inflate every count and graph node. Instead
+        we upsert on the (kind, target) identity: a repeat sighting refreshes
+        the summary/data and keeps the earliest timestamp, and `suspicious` is
+        sticky (once a source tripped the injection scanner it stays flagged).
+
+        A richer `service` finding also supersedes the bare `port` finding for
+        the same endpoint, so one open port is one node, not two.
+        """
         with self._lock:
+            if f.kind == "service":
+                self._conn.execute(
+                    "DELETE FROM findings WHERE kind='port' AND target=?",
+                    (f.target,))
             cur = self._conn.execute(
                 "INSERT INTO findings(kind,target,summary,data,source_task,"
-                "parent_target,suspicious,ts) VALUES(?,?,?,?,?,?,?,?)",
+                "parent_target,suspicious,ts) VALUES(?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(kind,target) DO UPDATE SET "
+                "summary=excluded.summary, data=excluded.data, "
+                "parent_target=COALESCE(excluded.parent_target,parent_target), "
+                "suspicious=MAX(findings.suspicious,excluded.suspicious)",
                 (f.kind, f.target, f.summary, json.dumps(f.data),
                  f.source_task, f.parent_target, int(f.suspicious), f.ts),
             )
             self._conn.commit()
-            return int(cur.lastrowid)
+            # lastrowid is 0 on a pure UPDATE; look the row id back up
+            if cur.lastrowid:
+                return int(cur.lastrowid)
+            row = self._conn.execute(
+                "SELECT id FROM findings WHERE kind=? AND target=?",
+                (f.kind, f.target)).fetchone()
+            return int(row["id"]) if row else 0
 
     def all_findings(self) -> List[Finding]:
         with self._lock:
@@ -109,26 +135,39 @@ class Store:
 
 
 # -- graph export -----------------------------------------------------------
+def _node_id(kind: str, target: str) -> str:
+    """Deterministic node id from a finding's identity.
+
+    Keying on (kind, target) — not the row index — is what makes the provenance
+    graph readable: every clue about one endpoint lands on the *same* node, and
+    a child's `parent_target` resolves to its parent's node id instead of a
+    dangling synthetic one.
+    """
+    return "f_" + re.sub(r"\W", "_", f"{kind}:{target}")
+
+
 def to_mermaid(findings: List[Finding]) -> str:
     lines = ["graph TD"]
-    seen = set()
+    emitted = set()
 
-    def node(nid: str, label: str, suspicious: bool = False) -> str:
-        if nid not in seen:
-            seen.add(nid)
+    def emit(kind: str, target: str, label: str, suspicious: bool = False) -> str:
+        nid = _node_id(kind, target)
+        if nid not in emitted:
+            emitted.add(nid)
             safe = label.replace('"', "'")[:48]
-            shape = f'{nid}["{safe}"]'
-            lines.append("  " + shape)
+            lines.append(f'  {nid}["{safe}"]')
             if suspicious:
                 lines.append(f"  class {nid} suspicious;")
         return nid
 
-    for i, f in enumerate(findings):
-        nid = f"n{i}"
-        node(nid, f"{f.kind}: {f.target}", f.suspicious)
-        if f.parent_target:
-            pid = "p_" + re.sub(r"\W", "_", f.parent_target)
-            node(pid, f.parent_target)
-            lines.append(f"  {pid} --> {nid}")
+    # nodes for every finding, then edges from each finding's parent host
+    for f in findings:
+        emit(f.kind, f.target, f"{f.kind}: {f.target}", f.suspicious)
+    for f in findings:
+        if not f.parent_target:
+            continue
+        # the parent is a host; emit() reuses its node if one already exists
+        pid = emit("host", f.parent_target, f"host: {f.parent_target}")
+        lines.append(f"  {pid} --> {_node_id(f.kind, f.target)}")
     lines.append("  classDef suspicious fill:#511,stroke:#f55,color:#fff;")
     return "\n".join(lines)

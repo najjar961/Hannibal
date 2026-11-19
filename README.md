@@ -323,7 +323,8 @@ tests/test_safety.py   control tests
 - [x] Semantic (model-based) second stage for paraphrase / multilingual evasion the patterns can't reach
 - [x] HMAC-signed audit log (tamper-proof, not just tamper-evident)
 - [x] Multi-host enumeration — sweep a range, then enumerate every live host in parallel
-- [ ] Findings dedup + "which clue led to which" edges surfaced in the report
+- [x] Map every injection attack class to its OWASP LLM Top 10 (2025) risk
+- [x] Findings dedup + "which clue led to which" edges surfaced in the report
 - [ ] Add real HTB/THM boxes to the benchmark lab and compare mock vs local-model planning
 
 ## Legal
