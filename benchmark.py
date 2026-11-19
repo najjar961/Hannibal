@@ -121,9 +121,16 @@ def main() -> int:
         execute = a.execute
         source = "simulated lab (hannibal/lab.py)"
 
-    rows = [bench_box(ip, prof, a.backend, a.model, a.base_url, a.api_key,
+    # live scans can take a while and bench_box is quiet, so show progress
+    # rather than leaving the operator staring at a blank terminal
+    rows = []
+    for i, (ip, prof) in enumerate(boxes.items(), 1):
+        print(f"[{i}/{len(boxes)}] scanning {ip} ...", flush=True)
+        r = bench_box(ip, prof, a.backend, a.model, a.base_url, a.api_key,
                       execute=execute)
-            for ip, prof in boxes.items()]
+        print(f"      done — {r['ports_found']}/{r['ports_truth']} ports, "
+              f"{r['commands']} cmds, {r['secs']}s", flush=True)
+        rows.append(r)
 
     # ---- console table ----
     hdr = (f"{'box':14} {'ports':7} {'recall':7} {'svc':6} {'web':4} "
