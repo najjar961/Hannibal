@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hannibal-recon"
+version = "1.0.0"
+description = "Autonomous, safety-first AI recon orchestrator — commander → generals → wraiths, with scope enforcement, prompt-injection defense and a tamper-evident audit log."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Giorgio El Najjar" }]
+keywords = [
+    "security", "recon", "pentest", "ai-agents", "llm",
+    "prompt-injection", "offensive-security", "red-team",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Security",
+    "Intended Audience :: Information Technology",
+]
+dependencies = []   # standard library only
+
+[project.urls]
+Homepage = "https://github.com/najjar961/Hannibal"
+Repository = "https://github.com/najjar961/Hannibal"
+
+[project.scripts]
+hannibal = "hannibal.cli:main"
+
+[tool.setuptools]
+packages = ["hannibal"]

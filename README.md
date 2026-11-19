@@ -65,21 +65,34 @@ graph TD
 
 ---
 
-## Quickstart
+## Install
 
-No dependencies — Python 3.8+ standard library only.
+No dependencies — Python 3.10+ standard library only. Clone and go, or install the
+`hannibal` command:
+
+```bash
+git clone https://github.com/najjar961/Hannibal
+cd Hannibal
+pip install -e .        # optional: gives you the `hannibal` command
+```
+
+Without installing, `python hannibal.py …` and `python -m hannibal …` work too.
+
+## Quickstart
 
 ```bash
 # full loop, deterministic simulation, nothing touches the network:
-python3 hannibal.py run \
+hannibal run \
     --objective "map my lab host" \
     --scope 10.10.10.5,10.10.10.0/24
 
 # prove what it did:
-python3 hannibal.py verify-audit hannibal_run
-python3 hannibal.py report hannibal_run
-python3 hannibal.py report hannibal_run --html   # shareable HTML scan report
+hannibal verify-audit hannibal_run
+hannibal report hannibal_run
+hannibal report hannibal_run --html   # shareable HTML scan report
 ```
+
+(Not installed? Swap `hannibal` for `python hannibal.py` in any command below.)
 
 Example run (abridged):
 
@@ -234,9 +247,11 @@ same table measures the model's planning quality instead.
 ## Project layout
 
 ```
-hannibal.py            CLI (run / verify-audit / report)
+pyproject.toml         packaging + `hannibal` console command
+hannibal.py            thin shim so `python hannibal.py` still works
 benchmark.py           benchmark harness → markdown + JSON scorecard
 hannibal/
+  cli.py               argparse CLI (run / verify-audit / report)
   orchestrator.py      round loop + parallel workers
   brain.py             MockBrain (deterministic) + LLMBrain (real model)
   scope.py             scope enforcement
