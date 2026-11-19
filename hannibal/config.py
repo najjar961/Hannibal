@@ -39,6 +39,7 @@ class RunConfig:
 
     # output
     quiet: bool = False                   # suppress per-step console logging
+    fresh: bool = True                    # clear prior findings/audit in workdir at start
 
     def summary(self) -> str:
         mode = "EXECUTE" if self.execute else "DRY-RUN"
