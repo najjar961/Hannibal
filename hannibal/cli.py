@@ -64,7 +64,7 @@ def cmd_run(a: argparse.Namespace) -> int:
 def cmd_verify(a: argparse.Namespace) -> int:
     import os
     path = a.path if a.path.endswith(".log") else os.path.join(a.path, "audit.log")
-    ok, msg, n = AuditLog.verify(path)
+    ok, msg, n = AuditLog.verify(path, key=os.environ.get("HANNIBAL_AUDIT_KEY"))
     status = "OK" if ok else "FAILED"
     print(f"[{status}] {msg} — {n} entries verified")
     return 0 if ok else 1

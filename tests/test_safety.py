@@ -100,6 +100,45 @@ class TestAuditChain(unittest.TestCase):
             self.assertFalse(ok2)
 
 
+class TestSignedAudit(unittest.TestCase):
+    def test_signed_verifies_with_key(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "audit.log")
+            log = AuditLog(p, key="secret")
+            for i in range(4):
+                log.record("e", n=i)
+            ok, msg, n = AuditLog.verify(p, "secret")
+            self.assertTrue(ok)
+            self.assertEqual(n, 4)
+            self.assertIn("signatures valid", msg)
+
+    def test_wrong_key_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "audit.log")
+            AuditLog(p, key="right").record("e", n=1)
+            self.assertFalse(AuditLog.verify(p, "wrong")[0])
+
+    def test_tampered_signed_line_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "audit.log")
+            log = AuditLog(p, key="secret")
+            for i in range(3):
+                log.record("e", n=i)
+            lines = open(p).read().splitlines()
+            lines[1] = lines[1].replace('"n":1', '"n":9')
+            with open(p, "w") as fh:
+                fh.write("\n".join(lines) + "\n")
+            self.assertFalse(AuditLog.verify(p, "secret")[0])
+
+    def test_unsigned_still_verifies(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "audit.log")
+            AuditLog(p).record("e", n=1)
+            ok, msg, _ = AuditLog.verify(p)
+            self.assertTrue(ok)
+            self.assertIn("unsigned", msg)
+
+
 class TestCoverageGuard(unittest.TestCase):
     """A weak model that quits early must still be driven to full recon depth."""
 

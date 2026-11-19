@@ -50,7 +50,10 @@ class Orchestrator:
                 except OSError:
                     pass
         self.store = Store(cfg.db_path)
-        self.audit = AuditLog(os.path.join(cfg.workdir, "audit.log"))
+        # optional HMAC signing of the audit log (see audit.py); key from env so
+        # it never lands on the command line or in the log itself
+        self.audit = AuditLog(os.path.join(cfg.workdir, "audit.log"),
+                              key=os.environ.get("HANNIBAL_AUDIT_KEY"))
         self.scope = ScopeGuard(cfg.scope)
         self.budget = Budget(cfg.max_rounds, cfg.max_seconds,
                              cfg.max_tokens, cfg.max_commands)

@@ -24,7 +24,7 @@ An autonomous agent that reads attacker-controlled output (HTTP titles, banners,
 | **Scope guard** | Declares *and* re-parses every command's targets; blocks anything outside the allow-listed IPs/CIDRs/hosts. DNS-widening is off by default. | `scope.py` |
 | **Command allowlist** | Only recon tools (`nmap`, `httpx`, `whatweb`, `dig`, `whois`), each with per-flag validation. No shell, ever (`shell=False`). | `commands.py` |
 | **Injection quarantine** | Untrusted output is fenced in unspoofable delimiters and scanned for override patterns; flagged findings are marked `suspicious` and can never widen scope. | `injection.py` |
-| **Tamper-evident audit** | Every decision is a hash-chained JSON line. Changing one past byte breaks verification of every line after it. | `audit.py` |
+| **Tamper-evident audit** | Every decision is a hash-chained JSON line; changing one past byte breaks verification of every line after it. Set `HANNIBAL_AUDIT_KEY` and each entry is also HMAC-signed — unforgeable without the key. | `audit.py` |
 | **Budget / kill-switch** | Hard caps on rounds, wall-time, tokens and commands, checked before every round and every command. | `budget.py` |
 
 The scope guard is the hard backstop; the injection scanner is the early detector and audit signal. **Defence in depth** — a hostile target would have to beat both, and even then the allowlist and the audit trail remain.
@@ -145,6 +145,22 @@ python3 -m unittest discover -s tests -v
 ```
 
 The suite asserts the guards actually **block**: out-of-scope targets (including ones hidden in args), non-recon binaries, shell metacharacters, unsafe nmap scripts, injection strings, and audit tampering.
+
+### Signed audit log (tamper-evident → tamper-proof)
+
+The hash chain detects tampering, but anyone who edits a line can recompute the
+chain — the hash needs no secret. Supply an audit key and every entry is also
+HMAC-signed, so the log can't be forged by anyone who doesn't hold the key (and
+the key is never written to the log, so having the log isn't enough):
+
+```bash
+export HANNIBAL_AUDIT_KEY="a-secret-only-you-hold"
+hannibal run -o "map the box" -s 10.10.11.20
+hannibal verify-audit hannibal_run      # → "chain intact + N signatures valid"
+```
+
+Verify with the wrong key, or after editing any line, and it fails on the exact
+line. Without the key, runs still work and stay hash-chained — signing is opt-in.
 
 ---
 

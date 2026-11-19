@@ -63,7 +63,8 @@ def build_html(workdir: str) -> str:
     audit_path = os.path.join(workdir, "audit.log")
     audit_ok, audit_msg, audit_n = (False, "no audit log", 0)
     if os.path.exists(audit_path):
-        audit_ok, audit_msg, audit_n = AuditLog.verify(audit_path)
+        audit_ok, audit_msg, audit_n = AuditLog.verify(
+            audit_path, os.environ.get("HANNIBAL_AUDIT_KEY"))
 
     suspicious_n = sum(1 for f in findings if f.suspicious)
     mermaid = to_mermaid(findings)
