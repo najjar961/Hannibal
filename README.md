@@ -189,6 +189,15 @@ Two stages, by design: cheap regex + normalization catches the mechanical 95%;
 the model catches the semantic remainder the patterns can't reach. The planning
 model you already run does double duty as the judge.
 
+In one run with a local judge (Dolphin-Mistral 7B via Ollama) the two stages
+together caught all **42/42** corpus payloads at **0 false positives**. Read that
+honestly, though: it's a 42-payload corpus I wrote (100% here means the unit
+tests pass, not that injection is "solved" — the next attacker writes payload
+#43); the judge is **non-deterministic**, so 0 false positives is *that run*, not
+a guarantee — the rigorous version runs it N times and reports the range; and the
+judge is itself an injection target, mitigated by quarantine but not eliminated.
+The method is the claim — layered, measured, limits stated — not the number.
+
 ---
 
 ## Benchmark
