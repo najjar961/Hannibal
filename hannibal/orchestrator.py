@@ -39,6 +39,16 @@ class Orchestrator:
         os.makedirs(cfg.workdir, exist_ok=True)
         if not cfg.db_path:
             cfg.db_path = os.path.join(cfg.workdir, "hannibal.sqlite")
+        # each run starts clean: a re-run into the same workdir must not inherit
+        # a previous run's findings or audit chain (that would short-circuit the
+        # Commander on stale state and mix two runs' audit logs).
+        if cfg.fresh:
+            for stale in (cfg.db_path, os.path.join(cfg.workdir, "audit.log")):
+                try:
+                    if os.path.exists(stale):
+                        os.remove(stale)
+                except OSError:
+                    pass
         self.store = Store(cfg.db_path)
         self.audit = AuditLog(os.path.join(cfg.workdir, "audit.log"))
         self.scope = ScopeGuard(cfg.scope)

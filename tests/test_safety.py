@@ -201,6 +201,26 @@ class TestRealParse(unittest.TestCase):
         self.assertTrue(f[0].suspicious)
 
 
+class TestRunHygiene(unittest.TestCase):
+    def test_rerun_same_workdir_is_fresh(self):
+        import tempfile
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        with tempfile.TemporaryDirectory() as d:
+            def run():
+                o = Orchestrator(RunConfig(objective="m",
+                                           scope=["10.10.10.5", "10.10.10.0/24"],
+                                           backend="mock", quiet=True, workdir=d))
+                o.run()
+                return o
+            o1 = run()
+            o2 = run()   # second run into the SAME workdir
+            # the re-run actually scanned and wasn't inflated by stale findings
+            self.assertGreater(o2.final_state.commands, 0)
+            self.assertEqual(sum(o1.final_counts.values()),
+                             sum(o2.final_counts.values()))
+
+
 class TestHtmlReport(unittest.TestCase):
     def test_build_html_from_run(self):
         import tempfile
