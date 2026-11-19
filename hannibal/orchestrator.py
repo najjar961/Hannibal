@@ -28,6 +28,7 @@ from .scope import ScopeGuard
 from .store import Store, to_mermaid
 from .brain import Brain, MockBrain, LLMBrain, coverage_next
 from .llm import LLMClient
+from .semantic import LLMJudge
 from . import commands as cmd
 from .parse import parse
 
@@ -44,6 +45,7 @@ class Orchestrator:
         self.budget = Budget(cfg.max_rounds, cfg.max_seconds,
                              cfg.max_tokens, cfg.max_commands)
         self.brain: Brain = self._build_brain()
+        self.judge = self._build_judge()
         self._print_lock = threading.Lock()
         self.stopped_reason = ""
 
@@ -53,6 +55,14 @@ class Orchestrator:
         client = LLMClient(self.cfg.base_url, self.cfg.model, self.cfg.api_key,
                            self.cfg.command_timeout)
         return LLMBrain(client, self.cfg.scope)
+
+    def _build_judge(self):
+        """Second-stage semantic injection judge, only when a model is available."""
+        if not self.cfg.semantic or self.cfg.backend == "mock":
+            return None
+        client = LLMClient(self.cfg.base_url, self.cfg.model, self.cfg.api_key,
+                           self.cfg.command_timeout)
+        return LLMJudge(client)
 
     def _log(self, msg: str) -> None:
         if self.cfg.quiet:
@@ -98,6 +108,17 @@ class Orchestrator:
 
         # 5. parse -> findings (+ injection scan on untrusted output)
         findings, sr = parse(spec, output, task.id)
+
+        # 5b. second-stage semantic judge: only when the regex pass is clean,
+        # so the model cost is paid only where it might catch something new
+        if self.judge is not None and not sr.suspicious and self.judge.judge(output):
+            sr.suspicious = True
+            sr.hits.append("[semantic] intent-based injection (no trigger words)")
+            for f in findings:
+                f.suspicious = True
+            self.audit.record("semantic_injection_flagged", task=task.id,
+                              cmd=spec.as_cmdline())
+
         if sr.suspicious:
             self.audit.record("injection_flagged", task=task.id,
                               cmd=spec.as_cmdline(), hits=sr.hits)

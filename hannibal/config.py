@@ -27,6 +27,9 @@ class RunConfig:
     execute: bool = False                 # False = dry-run (never spawns real tools)
     command_timeout: int = 120
 
+    # detection
+    semantic: bool = False                # second-stage model-based injection judge
+
     # paths
     workdir: str = "hannibal_run"
     db_path: str = ""                     # filled in at runtime if empty

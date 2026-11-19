@@ -160,12 +160,34 @@ Cyrillic/Greek homoglyphs to ASCII, collapses letter-spacing (`i g n o r e`),
 and rot13-decodes, then runs the patterns over every view. That catches all four
 obfuscated payloads with zero new false positives.
 
-What it still misses — honestly — are the 2 **semantic** evasions: a paraphrase
-with no trigger words, and the same attack in German. No amount of normalization
-helps there; catching those needs a model-based second stage (a classifier, or
-the planning model itself judging intent), which is the next roadmap item.
-Keeping those misses in the corpus keeps the score honest instead of a hollow
-100%.
+What the regex stage still misses — honestly — are the 2 **semantic** evasions:
+a paraphrase with no trigger words, and the same attack in German. No amount of
+normalization helps there. That is what the second stage is for.
+
+### Second stage: a model judging intent
+
+`--semantic` adds a model-based judge that runs *only on output the regex pass
+left clean*, so you pay the token cost only where it might catch something new.
+It reads the untrusted text, quarantined, and answers one question: is this
+trying to manipulate the agent? Because the judge itself reads attacker-
+controlled text, its system prompt forbids obeying anything inside the markers —
+it classifies, it never acts.
+
+```bash
+# regex only (fast, always on):
+python3 redteam.py
+
+# add the semantic judge (needs a running model):
+python3 redteam.py --semantic --model dolphin-mistral:latest
+
+# or in a live run:
+python3 hannibal.py run -o "…" -s 10.10.11.20 --backend ollama \
+    --model qwen3:8b --semantic
+```
+
+Two stages, by design: cheap regex + normalization catches the mechanical 95%;
+the model catches the semantic remainder the patterns can't reach. The planning
+model you already run does double duty as the judge.
 
 ---
 
@@ -204,7 +226,8 @@ hannibal/
   brain.py             MockBrain (deterministic) + LLMBrain (real model)
   scope.py             scope enforcement
   commands.py          recon allowlist + runner + simulator
-  injection.py         untrusted-output quarantine + scanner
+  injection.py         untrusted-output quarantine + regex scanner + deobfuscation
+  semantic.py          second-stage model judge (intent-based injection detection)
   audit.py             hash-chained audit log
   budget.py            kill-switch / budgets
   store.py             SQLite queue + findings graph (Mermaid export)
@@ -225,7 +248,7 @@ tests/test_safety.py   control tests
 - [x] Red-team the injection layer with a payload corpus and measure catch + false-positive rate
 - [x] Coverage guard so a weak model can't stop before full recon depth
 - [x] Deobfuscation layer (base64 / homoglyph / spacing / rot13) to beat mechanical evasion
-- [ ] Semantic (model-based) second stage for paraphrase / multilingual evasion the patterns can't reach
+- [x] Semantic (model-based) second stage for paraphrase / multilingual evasion the patterns can't reach
 - [ ] Findings dedup + "which clue led to which" edges surfaced in the report
 - [ ] Add real HTB/THM boxes to the benchmark lab and compare mock vs local-model planning
 

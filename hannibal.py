@@ -47,7 +47,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         model=a.model, base_url=a.base_url, api_key=a.api_key or "",
         workers=a.workers, max_rounds=a.max_rounds, max_seconds=a.max_seconds,
         max_tokens=a.max_tokens, max_commands=a.max_commands,
-        execute=a.execute, workdir=a.workdir,
+        execute=a.execute, workdir=a.workdir, semantic=a.semantic,
     )
     if not cfg.scope:
         print("error: --scope is required (the authorized targets)", file=sys.stderr)
@@ -108,6 +108,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--max-commands", type=int, default=200)
     r.add_argument("--execute", action="store_true",
                    help="actually run the tools (default: deterministic dry-run)")
+    r.add_argument("--semantic", action="store_true",
+                   help="enable the model-based second-stage injection judge "
+                        "(needs a real --backend; catches paraphrase/multilingual)")
     r.add_argument("--workdir", default="hannibal_run")
     r.set_defaults(func=cmd_run)
 
