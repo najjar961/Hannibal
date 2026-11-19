@@ -61,6 +61,15 @@ class Orchestrator:
         self.judge = self._build_judge()
         self._print_lock = threading.Lock()
         self.stopped_reason = ""
+        self._phase_attempts: dict = {}   # objective goal -> times issued
+
+    def _note_inconclusive(self, goal: str) -> None:
+        """Record a visible note that a recon phase gave up, so the report is
+        honest about what was *attempted* but not resolved (not just silent)."""
+        host = goal.split()[-1]
+        self.store.add_finding(Finding(
+            "note", f"inconclusive:{goal}", f"phase inconclusive — {goal}",
+            {"phase": goal}, None, host))
 
     def _build_brain(self) -> Brain:
         if self.cfg.backend == "mock":
@@ -183,9 +192,30 @@ class Orchestrator:
                 self.stopped_reason = "objective complete"
                 break
 
+            # convergence guard: a phase that keeps reappearing with no progress
+            # (classically a service scan that times out on a slow WAN host) would
+            # otherwise be re-queued every round until the budget runs out. Cap
+            # attempts per distinct objective; once exhausted, mark the phase
+            # inconclusive and move on so the run converges instead of spinning.
+            live_objs = []
+            for obj in plan.objectives:
+                self._phase_attempts[obj.goal] = self._phase_attempts.get(obj.goal, 0) + 1
+                if self._phase_attempts[obj.goal] > cfg.max_phase_attempts:
+                    self.audit.record("phase_inconclusive", round=rnd,
+                                      objective=obj.goal,
+                                      attempts=self._phase_attempts[obj.goal] - 1)
+                    self._note_inconclusive(obj.goal)
+                    continue
+                live_objs.append(obj)
+
+            if not live_objs:
+                self.stopped_reason = "converged — remaining phases inconclusive"
+                self._log("  (no further progress available — stopping)")
+                break
+
             # generals -> commands
             specs: List[CommandSpec] = []
-            for obj in plan.objectives:
+            for obj in live_objs:
                 self._log(f"  General ▸ {obj.goal}")
                 specs.extend(self.brain.decompose(obj.goal, findings, cfg.scope))
             self.budget.add_tokens(self.brain.tokens_used() - self.budget.state().tokens)

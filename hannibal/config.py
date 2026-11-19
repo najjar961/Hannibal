@@ -25,7 +25,11 @@ class RunConfig:
 
     # execution
     execute: bool = False                 # False = dry-run (never spawns real tools)
-    command_timeout: int = 120
+    command_timeout: int = 180            # per-command; real -sV over a WAN is slow
+    max_phase_attempts: int = 2           # convergence guard: give up on a recon
+    #                                       phase that makes no progress after N tries
+    #                                       (e.g. a service scan that keeps timing out)
+    #                                       instead of re-queuing it until the budget
 
     # detection
     semantic: bool = False                # second-stage model-based injection judge
