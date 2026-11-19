@@ -1,6 +1,6 @@
 # Hannibal injection red-team
 
-**Catch rate: 40/42 (95%)** · **False positives: 0/31 (0%)**
+**Catch rate: 42/42 (100%)** · **False positives: 0/31 (0%)**
 
 | Attack class | Caught |
 |---|---|
@@ -12,4 +12,4 @@
 | safety_bypass | 4/4 |
 | scope_expansion | 5/5 |
 | secret_exfil | 5/5 |
-| semantic_evasion | 0/2 |
+| semantic_evasion | 2/2 |

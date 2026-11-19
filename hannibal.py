@@ -69,12 +69,18 @@ def cmd_verify(a: argparse.Namespace) -> int:
 
 
 def cmd_report(a: argparse.Namespace) -> int:
-    import os, json
+    import os
     from hannibal.store import Store, to_mermaid
     db = os.path.join(a.path, "hannibal.sqlite")
     if not os.path.exists(db):
         print(f"no run found at {db}", file=sys.stderr)
         return 1
+    if a.html:
+        from hannibal.htmlreport import write_report
+        out = a.html if a.html is not True else os.path.join(a.path, "report.html")
+        write_report(a.path, out)
+        print(f"wrote HTML report → {out}")
+        return 0
     store = Store(db)
     findings = store.all_findings()
     print(f"\nFindings ({len(findings)}):")
@@ -120,6 +126,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     rep = sub.add_parser("report", help="print findings + graph from a run")
     rep.add_argument("path", help="run directory")
+    rep.add_argument("--html", nargs="?", const=True, default=None,
+                     metavar="FILE",
+                     help="write a self-contained HTML report (default: "
+                          "<run>/report.html)")
     rep.set_defaults(func=cmd_report)
     return p
 

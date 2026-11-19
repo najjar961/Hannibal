@@ -73,6 +73,7 @@ python3 hannibal.py run \
 # prove what it did:
 python3 hannibal.py verify-audit hannibal_run
 python3 hannibal.py report hannibal_run
+python3 hannibal.py report hannibal_run --html   # shareable HTML scan report
 ```
 
 Example run (abridged):
@@ -240,6 +241,7 @@ hannibal/
   audit.py             hash-chained audit log
   budget.py            kill-switch / budgets
   store.py             SQLite queue + findings graph (Mermaid export)
+  htmlreport.py        self-contained HTML scan report
   parse.py             simulator output → structured findings
   realparse.py         real nmap -oX XML / httpx -json → findings
   lab.py               simulated lab fixtures + ground truth

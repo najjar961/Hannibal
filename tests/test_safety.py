@@ -201,5 +201,22 @@ class TestRealParse(unittest.TestCase):
         self.assertTrue(f[0].suspicious)
 
 
+class TestHtmlReport(unittest.TestCase):
+    def test_build_html_from_run(self):
+        import tempfile
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        from hannibal.htmlreport import build_html
+        with tempfile.TemporaryDirectory() as d:
+            cfg = RunConfig(objective="map", scope=["10.10.10.5", "10.10.10.0/24"],
+                            backend="mock", quiet=True, workdir=d)
+            Orchestrator(cfg).run()
+            page = build_html(d)
+            self.assertIn("HANNIBAL", page)
+            self.assertIn("mermaid", page)
+            self.assertIn("audit intact", page)       # audit chain verified
+            self.assertIn("quarantined", page)         # the injected web finding
+
+
 if __name__ == "__main__":
     unittest.main()
