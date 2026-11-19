@@ -285,12 +285,30 @@ The harness is also how bugs get caught: it writes `benchmark_results.md` /
 shows up as a number, not a vibe. Swap the mock backend for a model and the
 same table measures the model's planning quality instead.
 
+### Real boxes (HTB / TryHackMe)
+
+The sim lab proves the *pipeline* deterministically; to prove it against real
+targets, point the same harness at machines you've rooted. Ground truth is
+data, not code — list each box in a JSON file (copy `targets.example.json`):
+
+```bash
+cp targets.example.json targets.json         # fill in boxes you're authorized to scan
+# connect your HTB/THM VPN, then:
+python3 benchmark.py --targets targets.json   # implies --execute (live scans)
+```
+
+Scoring is identical to the sim lab — recall, service depth, cost — so you get
+a like-for-like number for how much of a real box's surface Hannibal discovers
+on its own. **Only scan boxes you're explicitly authorized to**; HTB and THM
+authorize their own machines, and nothing else is in scope.
+
 ## Project layout
 
 ```
 pyproject.toml         packaging + `hannibal` console command
 hannibal.py            thin shim so `python hannibal.py` still works
 benchmark.py           benchmark harness → markdown + JSON scorecard
+targets.example.json   template for real HTB/THM boxes (`--targets`)
 hannibal/
   cli.py               argparse CLI (run / verify-audit / report)
   orchestrator.py      round loop + parallel workers
@@ -305,7 +323,7 @@ hannibal/
   htmlreport.py        self-contained HTML scan report
   parse.py             simulator output → structured findings
   realparse.py         real nmap -oX XML / httpx -json → findings
-  lab.py               simulated lab fixtures + ground truth
+  lab.py               simulated lab fixtures + real-box loader (load_boxes)
   redteam_corpus.py    injection payloads + benign banners (ground truth)
 redteam.py             injection detector scorer → markdown + JSON
 tests/test_safety.py   control tests
@@ -325,7 +343,7 @@ tests/test_safety.py   control tests
 - [x] Multi-host enumeration — sweep a range, then enumerate every live host in parallel
 - [x] Map every injection attack class to its OWASP LLM Top 10 (2025) risk
 - [x] Findings dedup + "which clue led to which" edges surfaced in the report
-- [ ] Add real HTB/THM boxes to the benchmark lab and compare mock vs local-model planning
+- [x] Benchmark against real HTB/THM boxes via a JSON ground-truth file (`--targets`)
 
 ## Legal
 

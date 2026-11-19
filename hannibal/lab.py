@@ -58,6 +58,44 @@ LAB: Dict[str, BoxProfile] = {
 }
 
 
+def load_boxes(path: str) -> Dict[str, BoxProfile]:
+    """Load real-box ground truth from a JSON file into BoxProfiles.
+
+    The simulated LAB above is baked into the code; real practice boxes
+    (HTB / TryHackMe machines you've rooted) are *data* you supply, because
+    their IPs and services differ per account and are only reachable from your
+    own VPN session. The benchmark reads this file, runs Hannibal `--execute`
+    against each live box, and scores recall against the ground truth here —
+    exactly as it does for the sim lab.
+
+    Schema (see targets.example.json):
+        {"boxes": [{"ip": "10.10.10.3", "name": "Lame",
+                    "ports": {"21": "ftp", "22": "ssh", "445": "microsoft-ds"},
+                    "versions": {"21": "vsftpd 2.3.4"},
+                    "web_title": "", "web_tech": "", "injection": false}]}
+
+    Only scan boxes you are explicitly authorized to (HTB/THM authorize their
+    own machines; nothing else is in scope).
+    """
+    import json
+    with open(path, "r", encoding="utf-8") as fh:
+        raw = json.load(fh)
+    boxes: Dict[str, BoxProfile] = {}
+    for b in raw.get("boxes", []):
+        ip = str(b["ip"]).strip()
+        ports = {int(k): str(v) for k, v in b.get("ports", {}).items()}
+        versions = {int(k): str(v) for k, v in b.get("versions", {}).items()}
+        boxes[ip] = BoxProfile(
+            ip=ip, ports=ports, versions=versions,
+            web_title=b.get("web_title", ""),
+            web_tech=b.get("web_tech", "") or "Apache,PHP",
+            injection=bool(b.get("injection", False)),
+        )
+    if not boxes:
+        raise ValueError(f"{path}: no boxes found (expected a non-empty 'boxes' list)")
+    return boxes
+
+
 def resolve_box(targets: List[str]) -> Optional[BoxProfile]:
     """Map a command's target (IP or CIDR) to a lab box, if any."""
     for t in targets:

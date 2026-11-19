@@ -284,5 +284,85 @@ class TestHtmlReport(unittest.TestCase):
             self.assertIn("quarantined", page)         # the injected web finding
 
 
+class TestFindingsProvenance(unittest.TestCase):
+    def _store(self):
+        from hannibal.store import Store
+        s = Store(os.path.join(tempfile.mkdtemp(), "t.sqlite"))
+        self.addCleanup(s.close)
+        return s
+
+    def test_rescan_is_deduped(self):
+        s = self._store()
+        for _ in range(3):
+            s.add_finding(Finding("port", "10.0.0.5:22", "22 open",
+                                  {"port": 22}, 1, "10.0.0.5"))
+        self.assertEqual(s.counts().get("port"), 1)
+
+    def test_service_supersedes_port(self):
+        s = self._store()
+        s.add_finding(Finding("port", "10.0.0.5:22", "22 open", {}, 1, "10.0.0.5"))
+        s.add_finding(Finding("service", "10.0.0.5:22", "OpenSSH 8.9", {}, 2, "10.0.0.5"))
+        kinds = {f.kind for f in s.all_findings() if f.target == "10.0.0.5:22"}
+        self.assertEqual(kinds, {"service"})
+
+    def test_graph_connects_child_to_parent_host(self):
+        from hannibal.store import to_mermaid
+        s = self._store()
+        s.add_finding(Finding("host", "10.0.0.5", "up", {}, 1, None))
+        s.add_finding(Finding("service", "10.0.0.5:22", "OpenSSH", {}, 2, "10.0.0.5"))
+        g = to_mermaid(s.all_findings())
+        self.assertIn("f_host_10_0_0_5 --> f_service_10_0_0_5_22", g)
+        self.assertEqual(g.count('f_host_10_0_0_5["'), 1)  # one host node, not many
+
+    def test_suspicious_flag_is_sticky(self):
+        s = self._store()
+        s.add_finding(Finding("web", "http://x/", "200", {}, 1, "x", suspicious=True))
+        s.add_finding(Finding("web", "http://x/", "200 again", {}, 2, "x", suspicious=False))
+        f = [f for f in s.all_findings() if f.target == "http://x/"][0]
+        self.assertTrue(f.suspicious)
+
+
+class TestRealBoxBenchmark(unittest.TestCase):
+    def test_load_boxes_from_json(self):
+        from hannibal.lab import load_boxes
+        p = os.path.join(tempfile.mkdtemp(), "t.json")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write('{"boxes":[{"ip":"10.10.10.3","ports":{"22":"ssh","445":'
+                     '"microsoft-ds"},"versions":{"22":"OpenSSH 4.7"}}]}')
+        boxes = load_boxes(p)
+        self.assertIn("10.10.10.3", boxes)
+        self.assertEqual(boxes["10.10.10.3"].ports[22], "ssh")
+        self.assertEqual(boxes["10.10.10.3"].versions[445] if 445 in
+                         boxes["10.10.10.3"].versions else None, None)
+
+    def test_load_boxes_rejects_empty(self):
+        from hannibal.lab import load_boxes
+        p = os.path.join(tempfile.mkdtemp(), "t.json")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write('{"boxes":[]}')
+        with self.assertRaises(ValueError):
+            load_boxes(p)
+
+    def test_example_template_is_valid(self):
+        from hannibal.lab import load_boxes
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        boxes = load_boxes(os.path.join(here, "targets.example.json"))
+        self.assertGreaterEqual(len(boxes), 1)
+
+    def test_score_box_computes_recall(self):
+        from benchmark import score_box
+        from hannibal.lab import BoxProfile
+
+        class S:  # minimal state stub
+            rounds = commands = tokens = 0
+            elapsed = 0.0
+        prof = BoxProfile("10.0.0.3", {22: "ssh", 80: "http", 445: "smb"})
+        # discovered 2 of 3 ports, one with a version, web seen
+        row = score_box(({22, 80}, {22}, True), prof, 0, S())
+        self.assertEqual(row["ports_found"], 2)
+        self.assertEqual(row["port_recall"], 0.67)
+        self.assertEqual(row["web"], "✓")
+
+
 if __name__ == "__main__":
     unittest.main()

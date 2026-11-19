@@ -1,0 +1,37 @@
+{
+  "_comment": "Real-box benchmark targets. Copy to targets.json and fill in boxes you are AUTHORIZED to scan (HTB / TryHackMe authorize their own machines; nothing else is in scope). Run: python3 benchmark.py --targets targets.json  (implies --execute; be on the VPN). Ground truth is what you confirmed after rooting the box — ports are the keys, service names the values; versions are optional. 'injection' stays false for real boxes (they carry no planted payloads).",
+  "boxes": [
+    {
+      "ip": "10.10.10.3",
+      "name": "Lame",
+      "ports": {
+        "21": "ftp",
+        "22": "ssh",
+        "139": "netbios-ssn",
+        "445": "microsoft-ds"
+      },
+      "versions": {
+        "21": "vsftpd 2.3.4",
+        "22": "OpenSSH 4.7p1",
+        "445": "Samba smbd 3.0.20"
+      },
+      "web_title": "",
+      "web_tech": "",
+      "injection": false
+    },
+    {
+      "ip": "10.10.10.X",
+      "name": "YourBox",
+      "ports": {
+        "80": "http",
+        "443": "https"
+      },
+      "versions": {
+        "80": "Apache httpd 2.4.x"
+      },
+      "web_title": "Example App",
+      "web_tech": "Apache,PHP",
+      "injection": false
+    }
+  ]
+}
