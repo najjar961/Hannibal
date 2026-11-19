@@ -36,76 +36,104 @@ class Brain(Protocol):
 # Deterministic rules shared by both brains (LLMBrain falls back to these).
 # The commander walks a classic recon progression and then stops.
 # ---------------------------------------------------------------------------
-def _open_ports(findings: List[Finding]) -> List[int]:
-    ports = []
+def _host_of(f: Finding, host: str) -> bool:
+    """Does this finding belong to `host`? (by provenance or target spelling)"""
+    return (f.parent_target == host or f.target == host
+            or f.target.startswith(host + ":"))
+
+
+def _live_hosts(findings: List[Finding]) -> List[str]:
+    out: List[str] = []
     for f in findings:
-        if f.kind == "port":
+        if f.kind == "host" and f.target not in out:
+            out.append(f.target)
+    return out
+
+
+def _open_ports_for(findings: List[Finding], host: str) -> List[int]:
+    ports = set()
+    for f in findings:
+        if f.kind in ("port", "service") and _host_of(f, host):
             p = f.data.get("port")
             if isinstance(p, int):
-                ports.append(p)
-    return sorted(set(ports))
+                ports.add(p)
+    return sorted(ports)
 
 
-def _has(findings: List[Finding], kind: str) -> bool:
-    return any(f.kind == kind for f in findings)
+def _has_for(findings: List[Finding], kind: str, host: str) -> bool:
+    return any(f.kind == kind and _host_of(f, host) for f in findings)
 
 
 def _primary_host(findings: List[Finding], scope: List[str]) -> str:
     concrete = [s for s in scope if "/" not in s]
-    host_findings = [f.target for f in findings if f.kind == "host"]
-    # prefer a discovered host the operator explicitly scoped, so a broad sweep
-    # that turns up several in-scope hosts doesn't make the loop fixate on
-    # whichever one happened to answer first
-    for h in host_findings:
+    hosts = _live_hosts(findings)
+    for h in hosts:
         if h in concrete:
             return h
-    if host_findings:
-        return host_findings[0]
+    if hosts:
+        return hosts[0]
     if concrete:
         return concrete[0]
     return scope[0] if scope else "target"
 
 
+def _host_next(findings: List[Finding], host: str):
+    """The next recon step a single host still needs, or None if it's done."""
+    has_ports = _has_for(findings, "port", host) or _has_for(findings, "service", host)
+    if not has_ports:
+        return GeneralObjective(f"port scan on {host}", "find the open ports")
+    ports = _open_ports_for(findings, host)
+    if ports and not _has_for(findings, "service", host):
+        return GeneralObjective(f"service and version enumeration on {host}",
+                                "turn open ports into service facts")
+    if (80 in ports or 443 in ports) and not _has_for(findings, "web", host):
+        return GeneralObjective(f"web fingerprinting on {host}", "titles and tech")
+    return None
+
+
 def rule_plan(objective: str, findings: List[Finding]) -> Plan:
-    if not _has(findings, "host") and not _has(findings, "port"):
-        return Plan(False, "no recon yet — begin with host and port discovery",
-                    [GeneralObjective("host and port discovery across the scope",
-                                      "establish what is alive and reachable")])
-    if _open_ports(findings) and not _has(findings, "service"):
-        return Plan(False, "ports found — identify the services behind them",
-                    [GeneralObjective("service and version enumeration on open ports",
-                                      "turn open ports into actionable service facts")])
-    ports = _open_ports(findings)
-    if (80 in ports or 443 in ports) and not _has(findings, "web"):
-        return Plan(False, "web service present — fingerprint it",
-                    [GeneralObjective("web fingerprinting on http/https",
-                                      "capture titles and tech stack")])
-    return Plan(True, "recon objective satisfied: hosts, services and web surface mapped")
+    hosts = _live_hosts(findings)
+    # nothing discovered yet -> sweep the scope for live hosts
+    if not hosts and not any(f.kind in ("port", "service") for f in findings):
+        return Plan(False, "no hosts yet — sweep the scope for live hosts",
+                    [GeneralObjective("host discovery across the scope",
+                                      "find every live host")])
+    # one objective per host that still has work — they run in parallel
+    objs = [o for h in hosts if (o := _host_next(findings, h)) is not None]
+    if objs:
+        return Plan(False, f"enumerating {len(hosts)} host(s) — {len(objs)} with work left",
+                    objs)
+    return Plan(True, "recon complete: every discovered host mapped (ports, services, web)")
+
+
+def _host_from_goal(goal: str, findings: List[Finding], scope: List[str]) -> str:
+    m = re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", goal)
+    return m.group(0) if m else _primary_host(findings, scope)
 
 
 def rule_decompose(goal: str, findings: List[Finding],
                    scope: List[str]) -> List[CommandSpec]:
     g = goal.lower()
-    host = _primary_host(findings, scope)
-    if "host and port" in g or "discovery" in g:
-        net = next((s for s in scope if "/" in s), host)
-        return [
-            CommandSpec("nmap", ["-sn", net], [net], "ping-sweep the scope"),
-            CommandSpec("nmap", ["-p-", "--min-rate", "1000", "--open", host],
-                        [host], "full TCP port scan of the primary host"),
-        ]
+    if "discovery" in g or "sweep" in g:
+        targets = list(scope) or ["target"]
+        return [CommandSpec("nmap", ["-sn", *targets], targets,
+                            "ping-sweep the whole scope for live hosts")]
+    host = _host_from_goal(goal, findings, scope)
     if "service" in g:
-        ports = _open_ports(findings) or [22, 80, 445]
+        ports = _open_ports_for(findings, host) or [22, 80, 445]
         plist = ",".join(str(p) for p in ports)
         return [CommandSpec("nmap", ["-sV", "-p", plist, host], [host],
-                            "version-detect the open ports")]
+                            f"version-detect open ports on {host}")]
     if "web" in g:
         return [
             CommandSpec("nmap", ["--script", "http-title", "-p", "80,443", host],
-                        [host], "grab web titles"),
-            CommandSpec("whatweb", ["-a", "1", host], [host], "fingerprint web tech"),
+                        [host], f"grab web titles on {host}"),
+            CommandSpec("whatweb", ["-a", "1", host], [host], f"fingerprint web tech on {host}"),
         ]
-    # unknown goal -> safe no-op discovery
+    if "port" in g:
+        return [CommandSpec("nmap", ["-p-", "--min-rate", "1000", "--open", host],
+                            [host], f"full TCP port scan of {host}")]
+    # unknown goal -> safe no-op liveness check
     return [CommandSpec("nmap", ["-sn", host], [host], "fallback liveness check")]
 
 
@@ -139,8 +167,10 @@ def _phase_satisfied(goal: str, specs: List[CommandSpec]) -> bool:
         return "-sV" in joined
     if "web" in g:
         return any(s.binary in ("httpx", "whatweb") for s in specs) or "http-title" in joined
-    if "discovery" in g or "host and port" in g:
-        return "-p-" in joined or "--top-ports" in joined or "-sn" in joined
+    if "discovery" in g or "sweep" in g:
+        return "-sn" in joined
+    if "port" in g:
+        return "-p-" in joined or "--top-ports" in joined
     return bool(specs)
 
 

@@ -53,8 +53,10 @@ def _discovered_ports(db_path: str):
 
 def bench_box(ip, profile, backend, model, base_url, api_key):
     workdir = tempfile.mkdtemp(prefix="hannibench_")
+    # scope to the single box: the planner now enumerates every live host it
+    # finds, so a /24 here would pull in neighbour lab boxes and muddy per-box scoring
     cfg = RunConfig(
-        objective=f"map {ip}", scope=[ip, _slash24(ip)],
+        objective=f"map {ip}", scope=[ip],
         backend=backend, model=model, base_url=base_url, api_key=api_key or "",
         workers=4, quiet=True, workdir=workdir,
         db_path=os.path.join(workdir, "h.sqlite"),

@@ -84,7 +84,7 @@ Without installing, `python hannibal.py …` and `python -m hannibal …` work t
 # full loop, deterministic simulation, nothing touches the network:
 hannibal run \
     --objective "map my lab host" \
-    --scope 10.10.10.5,10.10.10.0/24
+    --scope 10.10.10.5
 
 # prove what it did:
 hannibal verify-audit hannibal_run
@@ -97,19 +97,39 @@ hannibal report hannibal_run --html   # shareable HTML scan report
 Example run (abridged):
 
 ```
-[round 1] Commander: no recon yet — begin with host and port discovery
-  General ▸ host and port discovery across the scope
-  ✓ nmap 10.10.10.0/24 → 1 finding(s)
-  ✓ nmap 10.10.10.5    → 3 finding(s)
-[round 2] Commander: ports found — identify the services behind them
-  ✓ nmap 10.10.10.5    → 3 finding(s)
-[round 3] Commander: web service present — fingerprint it
+[round 1] Commander: no hosts yet — sweep the scope for live hosts
+  General ▸ host discovery across the scope
+  ✓ nmap 10.10.10.5 → 1 finding(s)
+[round 2] Commander: enumerating 1 host(s) — 1 with work left
+  General ▸ port scan on 10.10.10.5
+[round 3] Commander: enumerating 1 host(s) — 1 with work left
+  General ▸ service and version enumeration on 10.10.10.5
+[round 4] Commander: enumerating 1 host(s) — 1 with work left
+  General ▸ web fingerprinting on 10.10.10.5
   ⚠ injection attempt in output of nmap → quarantined (hits: ['ignore previous instructions', 'scan 8.8.8.8'])
-  ⚑ nmap 10.10.10.5    → 1 finding(s)
-[round 4] Commander: recon objective satisfied: hosts, services and web surface mapped
+[round 5] Commander: recon complete: every discovered host mapped (ports, services, web)
 
-stopped: objective complete   rounds=4 commands=5 ~tokens=320
+stopped: objective complete   rounds=5 commands=5 ~tokens=410
 findings: {'host': 1, 'port': 3, 'service': 3, 'web': 2}
+```
+
+### Scanning a whole network
+
+Give it a range instead of one host and it sweeps for live hosts, then enumerates
+*every* in-scope host it finds — port scan, services and web — in parallel, one
+objective per host per round:
+
+```bash
+hannibal run -o "map the lab" -s 10.10.10.0/24
+```
+```
+[round 1] Commander: no hosts yet — sweep the scope for live hosts
+[round 2] Commander: enumerating 2 host(s) — 2 with work left
+  General ▸ port scan on 10.10.10.5
+  General ▸ port scan on 10.10.10.9
+[round 3] … service enumeration on both …
+[round 4] … web fingerprinting on 10.10.10.5 …
+[round 5] Commander: recon complete: every discovered host mapped
 ```
 
 ### Driving it with a real model
@@ -248,10 +268,10 @@ python3 benchmark.py --backend ollama --model qwen3:8b   # scores a real model's
 
 ```
 box            ports   recall  svc    web  injection  rnd  cmd  tok    secs
-10.10.10.5     3/3     1.0     1.0    ✓    caught     4    5    320    0.03
-10.10.11.20    3/3     1.0     1.0    ✓    —          4    5    320    0.03
-10.10.11.33    4/4     1.0     1.0    ✓    caught     4    5    320    0.03
-10.10.10.9     2/2     1.0     1.0    ✓    —          3    3    230    0.02
+10.10.10.5     3/3     1.0     1.0    ✓    caught     5    5    410    0.03
+10.10.11.20    3/3     1.0     1.0    ✓    —          5    5    410    0.02
+10.10.11.33    4/4     1.0     1.0    ✓    caught     5    5    410    0.03
+10.10.10.9     2/2     1.0     1.0    ✓    —          4    3    320    0.01
 AVG port-recall 1.0 | svc-recall 1.0 | web 4/4 | injection 2/2 caught
 ```
 
@@ -296,6 +316,8 @@ tests/test_safety.py   control tests
 - [x] Coverage guard so a weak model can't stop before full recon depth
 - [x] Deobfuscation layer (base64 / homoglyph / spacing / rot13) to beat mechanical evasion
 - [x] Semantic (model-based) second stage for paraphrase / multilingual evasion the patterns can't reach
+- [x] HMAC-signed audit log (tamper-proof, not just tamper-evident)
+- [x] Multi-host enumeration — sweep a range, then enumerate every live host in parallel
 - [ ] Findings dedup + "which clue led to which" edges surfaced in the report
 - [ ] Add real HTB/THM boxes to the benchmark lab and compare mock vs local-model planning
 

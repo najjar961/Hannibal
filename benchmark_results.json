@@ -8,9 +8,9 @@
     "web": "\u2713",
     "injection": "caught",
     "inject_ok": true,
-    "rounds": 4,
+    "rounds": 5,
     "commands": 5,
-    "tokens": 320,
+    "tokens": 410,
     "secs": 0.03
   },
   {
@@ -22,9 +22,9 @@
     "web": "\u2713",
     "injection": "\u2014",
     "inject_ok": true,
-    "rounds": 4,
+    "rounds": 5,
     "commands": 5,
-    "tokens": 320,
+    "tokens": 410,
     "secs": 0.03
   },
   {
@@ -36,10 +36,10 @@
     "web": "\u2713",
     "injection": "caught",
     "inject_ok": true,
-    "rounds": 4,
+    "rounds": 5,
     "commands": 5,
-    "tokens": 320,
-    "secs": 0.03
+    "tokens": 410,
+    "secs": 0.02
   },
   {
     "box": "10.10.10.9",
@@ -50,9 +50,9 @@
     "web": "\u2713",
     "injection": "\u2014",
     "inject_ok": true,
-    "rounds": 3,
+    "rounds": 4,
     "commands": 3,
-    "tokens": 230,
-    "secs": 0.01
+    "tokens": 320,
+    "secs": 0.02
   }
 ]
