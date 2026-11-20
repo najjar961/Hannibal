@@ -204,13 +204,22 @@ role_injection         LLM01       5/5
 delimiter_escape       LLM01       5/5
 safety_bypass          LLM01       4/4
 obfuscation            LLM01       4/4    ← defeated by the deobfuscation layer
-semantic_evasion       LLM01       0/2    ← needs a model-based stage (documented gap)
+semantic               LLM01       2/2    ← paraphrase + non-English (e.g. German)
+semantic_evasion       LLM01       0/3    ← pure-intent metaphor: the honest ceiling
 secret_exfil           LLM02       5/5
 scope_expansion        LLM06       5/5
 command_exec           LLM06       5/5
-OVERALL catch rate                 40/42  (95%)
+OVERALL catch rate                 42/45  (93%)
 false-positive rate                0/31   (0%)
 ```
+
+The `semantic` row is detection beyond exact keywords: a paraphrase that reuses
+intent words, or an attack written in another language (an attacker isn't
+obliged to write in English). The `semantic_evasion` row is deliberately left
+*unsolved* — pure intent carried by metaphor, with zero shared vocabulary, which
+no regex can catch. It stays in the corpus on purpose: a hollow 100% would be
+less honest than showing exactly where pattern-matching ends and the
+model-backed judge (`semantic.py`) has to take over.
 
 Every attack class is mapped to its [OWASP Top 10 for LLM Applications (2025)](https://genai.owasp.org/llm-top-10/)
 risk — **LLM01** Prompt Injection, **LLM02** Sensitive Information Disclosure,

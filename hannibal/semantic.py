@@ -46,9 +46,12 @@ class StubJudge:
     Flags text containing a few intent markers so the second-stage plumbing can
     be exercised without a model. Real detection is LLMJudge.
     """
+    # keyed to the pure-intent metaphors in the red-team corpus — the payloads
+    # that reach the judge *because* regex (now including the semantic layer)
+    # can't catch meaning carried with zero shared vocabulary
     _MARKERS = (
-        "set aside", "survey the adjacent", "ignoriere", "durchsuche",
-        "vorherigen anweisungen", "disregard the operator",
+        "wanders a little further", "lives on this machine's street",
+        "every corner you peek", "set aside", "ignoriere", "durchsuche",
     )
 
     def judge(self, text: str) -> bool:

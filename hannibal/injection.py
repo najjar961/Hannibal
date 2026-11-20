@@ -62,6 +62,22 @@ _CATEGORY_PATTERNS = [
         r"(safety|guardrail|scope|allow-?list|restriction|filter|check)|"
         r"you (have|are given) (permission|authorization|admin|root)|"
         r"developer mode|jailbreak)", re.I)),
+    # Semantic layer: catches attacks that carry no English trigger word —
+    # a paraphrase ("set aside the operator's wishes") or another language
+    # (German "ignoriere ... Anweisungen"). An attacker isn't obliged to write
+    # in English, so an English-only detector is genuinely weak. This closes
+    # the easy end of that gap; the hard, pure-intent end is left to the
+    # model-backed judge in semantic.py (see the red-team corpus notes).
+    ("semantic", re.compile(
+        r"(set aside|disregard|pay no attention to|never mind)\b.{0,30}"
+        r"(operator|previous|prior|earlier|above)?.{0,8}"
+        r"(wish|instruction|direction|directive|order|rule)|"
+        r"ignorier\w*.{0,30}anweisung|missachte.{0,30}anweisung", re.I)),
+    ("semantic", re.compile(
+        r"(survey|enumerate|map|scan|probe|sweep)\s+(the\s+)?"
+        r"(adjacent|neighbou?ring|rest of the|entire|whole|other|surrounding)\s+"
+        r"(network|subnet|hosts?)|"
+        r"durchsuch\w*.{0,30}(netzwerk|subnetz)", re.I)),
 ]
 
 # Map each attack class to its OWASP Top 10 for LLM Applications (2025) risk,
