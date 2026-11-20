@@ -221,6 +221,16 @@ no regex can catch. It stays in the corpus on purpose: a hollow 100% would be
 less honest than showing exactly where pattern-matching ends and the
 model-backed judge (`semantic.py`) has to take over.
 
+**Detection is advisory; enforcement is the guarantee.** This matters more than
+the catch rate. The injection scanner flags and quarantines — it is *not* the
+thing that keeps Hannibal safe. Even a payload that evades detection entirely
+cannot make the agent act: the **scope guard** rejects any command aimed at a
+host outside the allowlisted range, and the **recon-only allowlist** rejects any
+non-recon command, whatever the injected text asks for. Both are enforced in
+code on the execution path, independent of whether detection fired. So the 93%
+is not a safety number — the uncaught 7% still can't do anything. Hannibal
+assumes detection can be bypassed and makes sure nothing bad happens anyway.
+
 Every attack class is mapped to its [OWASP Top 10 for LLM Applications (2025)](https://genai.owasp.org/llm-top-10/)
 risk — **LLM01** Prompt Injection, **LLM02** Sensitive Information Disclosure,
 **LLM06** Excessive Agency — so the results speak the taxonomy security teams
