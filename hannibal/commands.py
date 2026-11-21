@@ -14,8 +14,8 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from .types import CommandSpec
 
@@ -24,78 +24,193 @@ from .types import CommandSpec
 _FORBIDDEN = re.compile(r"[;&|`$><\n\r]")
 
 
+# ---------------------------------------------------------------------------
+# Per-tool argument grammar.
+#
+# Every argument must be accounted for: a known flag, a known flag's value
+# (validated), a known keyword, or a target. Anything else is rejected. The
+# targets this produces are what ScopeGuard checks, so the guard sees exactly
+# what the tool will see instead of guessing with a regex. (The earlier regex
+# extractor let through whatever it didn't recognise: nmap octet ranges such as
+# 10.0-255.0-255.1-254, integer IPs, IPv6, single-label names, and file paths
+# after -oN / --log-json.)
+# ---------------------------------------------------------------------------
+Validator = Callable[[str], Optional[str]]   # returns an error string or None
+
+
+@dataclass
+class ArgGrammar:
+    flags: Set[str] = field(default_factory=set)                # take no value
+    value_flags: Dict[str, Validator] = field(default_factory=dict)
+    target_value_flags: Set[str] = field(default_factory=set)   # value is a target (httpx -u)
+    attached: Dict[str, Validator] = field(default_factory=dict)  # nmap -p80 style
+    keywords: Set[str] = field(default_factory=set)             # bare non-target words (lowercase)
+    at_target: bool = False                                     # dig @server is a target
+
+
 @dataclass
 class AllowedCommand:
     binary: str
     description: str
-    validate: Callable[[List[str]], Optional[str]]  # returns error string or None
+    grammar: ArgGrammar
 
 
-def _only_flags_and_targets(allowed_flags: set[str]):
-    def _v(args: List[str]) -> Optional[str]:
-        for a in args:
-            if _FORBIDDEN.search(a):
-                return f"forbidden character in argument {a!r}"
-            if a.startswith("-"):
-                flag = a.split("=", 1)[0]
-                if flag not in allowed_flags:
-                    return f"flag {flag!r} not permitted for this command"
+def _int_between(lo: int, hi: int) -> Validator:
+    def _v(val: str) -> Optional[str]:
+        if not val.isdigit() or not lo <= int(val) <= hi:
+            return f"value {val!r} must be an integer {lo}-{hi}"
         return None
     return _v
 
+
+def _one_of(*choices: str) -> Validator:
+    allowed = {c.lower() for c in choices}
+    def _v(val: str) -> Optional[str]:
+        if val.lower() not in allowed:
+            return f"value {val!r} not permitted (allowed: {', '.join(sorted(allowed))})"
+        return None
+    return _v
+
+
+_PORT_ITEM = r"(?:[TU]:)?\d{1,5}(?:-\d{1,5})?"
+_PORT_SPEC = re.compile(rf"{_PORT_ITEM}(?:,{_PORT_ITEM})*")
+
+
+def _ports(val: str) -> Optional[str]:
+    if not _PORT_SPEC.fullmatch(val):
+        return f"port spec {val!r} is not a plain port list"
+    for n in re.findall(r"\d+", val):
+        if not 0 <= int(n) <= 65535:
+            return f"port {n} out of range"
+    return None
+
+
+# nmap --script is powerful; restrict to safe, non-intrusive scripts. -sC / -A
+# are NOT allowed: they run nmap's whole "default" script set and would make
+# this allowlist meaningless.
+_SAFE_NMAP_SCRIPTS = re.compile(r"^(http-title|http-headers|banner|ssl-cert|"
+                                r"dns-axfr|smb-os-discovery|ssh-hostkey)$")
+
+
+def _scripts(val: str) -> Optional[str]:
+    for s in val.split(","):
+        if not _SAFE_NMAP_SCRIPTS.match(s.strip()):
+            return f"nmap script {s!r} not on the safe-script allowlist"
+    return None
+
+
+def _stdout_only(val: str) -> Optional[str]:
+    # output goes to stdout so it can be parsed; a path would let the model
+    # write (or overwrite) arbitrary files with partly attacker-controlled text
+    if val != "-":
+        return f"output must go to stdout ('-'), not to file {val!r}"
+    return None
+
+
+_DNS_TYPES = ("a", "aaaa", "mx", "ns", "txt", "soa", "cname", "ptr", "srv", "any", "axfr")
 
 # The recon-only allowlist. Deliberately conservative; extend intentionally.
 REGISTRY: Dict[str, AllowedCommand] = {
     "nmap": AllowedCommand(
         "nmap", "port/host discovery and safe service detection",
-        _only_flags_and_targets({
-            "-sn", "-sV", "-sC", "-p", "-p-", "-Pn", "-T2", "-T3", "-T4",
-            "--min-rate", "--top-ports", "-oX", "-oN", "--open", "-A",
-            "--script",  # validated further below
-        }),
+        ArgGrammar(
+            flags={"-sn", "-sV", "-p-", "-Pn", "-T2", "-T3", "-T4", "--open"},
+            value_flags={"-p": _ports, "--min-rate": _int_between(1, 100_000),
+                         "--top-ports": _int_between(1, 65535),
+                         "--script": _scripts, "-oX": _stdout_only},
+            attached={"-p": _ports},
+        ),
     ),
     "httpx": AllowedCommand(
         "httpx", "HTTP probing / title + tech detection",
-        _only_flags_and_targets({"-title", "-tech-detect", "-status-code",
-                                 "-sc", "-td", "-json", "-silent", "-u"}),
+        ArgGrammar(flags={"-title", "-tech-detect", "-status-code", "-sc", "-td",
+                          "-json", "-silent"},
+                   target_value_flags={"-u"}),
     ),
     "whatweb": AllowedCommand(
         "whatweb", "web technology fingerprinting",
-        _only_flags_and_targets({"-a", "--color", "--log-json"}),
+        # --log-json is gone: it takes a file path (arbitrary file write)
+        ArgGrammar(flags={"--color"},
+                   value_flags={"-a": _int_between(1, 4),
+                                "--color": _one_of("never", "always", "auto")}),
     ),
     "dig": AllowedCommand(
-        "dig", "DNS lookups", _only_flags_and_targets({"+short", "-t", "any", "axfr"}),
+        "dig", "DNS lookups",
+        ArgGrammar(flags={"+short"}, value_flags={"-t": _one_of(*_DNS_TYPES)},
+                   keywords=set(_DNS_TYPES), at_target=True),
     ),
-    "whois": AllowedCommand(
-        "whois", "registration lookup", _only_flags_and_targets(set()),
-    ),
+    "whois": AllowedCommand("whois", "registration lookup", ArgGrammar()),
 }
 
-# nmap --script is powerful; restrict to safe, non-intrusive categories/scripts
-_SAFE_NMAP_SCRIPTS = re.compile(r"^(http-title|http-headers|banner|ssl-cert|"
-                                r"dns-axfr|smb-os-discovery|ssh-hostkey)$")
+
+def parse_args(binary: str, args: List[str]) -> Tuple[List[str], Optional[str]]:
+    """Split an argument vector into its targets, or return an error.
+
+    Deny by default: a token that is not a known flag, a validated flag value or
+    a known keyword is a target, and every target is scope-checked later.
+    """
+    cmd = REGISTRY.get(binary)
+    if cmd is None:
+        return [], f"command {binary!r} is not on the recon allowlist"
+    g = cmd.grammar
+    targets: List[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if not a or _FORBIDDEN.search(a) or a != a.strip():
+            return [], f"forbidden character or whitespace in argument {a!r}"
+        if a.startswith("-") and len(a) > 1:
+            if a.startswith("--") and "=" in a:
+                name, val = a.split("=", 1)
+                if name in g.value_flags:
+                    err = g.value_flags[name](val)
+                    if err:
+                        return [], err
+                elif name in g.target_value_flags:
+                    targets.append(val)
+                else:
+                    return [], f"flag {name!r} not permitted for {binary}"
+            elif a in g.flags:
+                pass
+            elif a in g.value_flags or a in g.target_value_flags:
+                if i + 1 >= len(args):
+                    return [], f"flag {a!r} needs a value"
+                i += 1
+                val = args[i]
+                if _FORBIDDEN.search(val):
+                    return [], f"forbidden character in argument {val!r}"
+                if a in g.value_flags:
+                    err = g.value_flags[a](val)
+                    if err:
+                        return [], err
+                else:
+                    targets.append(val)
+            else:
+                for prefix, check in g.attached.items():
+                    if a.startswith(prefix) and len(a) > len(prefix):
+                        err = check(a[len(prefix):])
+                        if err:
+                            return [], err
+                        break
+                else:
+                    return [], f"flag {a.split('=', 1)[0]!r} not permitted for {binary}"
+        elif a.startswith("+"):
+            if a not in g.flags:
+                return [], f"option {a!r} not permitted for {binary}"
+        elif a.lower() in g.keywords:
+            pass
+        elif g.at_target and a.startswith("@"):
+            targets.append(a[1:])
+        else:
+            targets.append(a)
+        i += 1
+    return targets, None
 
 
 def validate(spec: CommandSpec) -> Optional[str]:
-    cmd = REGISTRY.get(spec.binary)
-    if cmd is None:
-        return f"command {spec.binary!r} is not on the recon allowlist"
-    err = cmd.validate(spec.args)
-    if err:
-        return err
-    # extra check for nmap scripts
-    if spec.binary == "nmap":
-        for i, a in enumerate(spec.args):
-            val = None
-            if a.startswith("--script="):
-                val = a.split("=", 1)[1]
-            elif a == "--script" and i + 1 < len(spec.args):
-                val = spec.args[i + 1]
-            if val:
-                for s in val.split(","):
-                    if not _SAFE_NMAP_SCRIPTS.match(s.strip()):
-                        return f"nmap script {s!r} not on the safe-script allowlist"
-    return None
+    """Allowlist + argument-grammar check. Scope is checked separately."""
+    _, err = parse_args(spec.binary, spec.args)
+    return err
 
 
 # ---------------------------------------------------------------------------

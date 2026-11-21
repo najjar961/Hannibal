@@ -459,5 +459,161 @@ class TestRealBoxBenchmark(unittest.TestCase):
         self.assertEqual(row["web"], "✓")
 
 
+class TestScopeBypassRegressions(unittest.TestCase):
+    """Bypasses found against the old regex-based target extractor.
+
+    Each of these was ALLOWED before the guard became deny-by-default. The
+    scope is a single /24, the realistic case for an HTB/lab run.
+    """
+
+    def setUp(self):
+        self.g = ScopeGuard(["10.10.10.0/24", "lab.local"])
+
+    def blocked(self, binary, args, declared=("10.10.10.5",)):
+        spec = CommandSpec(binary, list(args), list(declared))
+        if validate(spec) is not None:
+            return True
+        return not self.g.check(list(declared), list(args), binary=binary).allowed
+
+    def allowed(self, binary, args, declared=("10.10.10.5",)):
+        return not self.blocked(binary, args, declared)
+
+    # -- target forms a tool expands beyond what the guard sees ---------------
+    def test_nmap_octet_range_blocked(self):
+        self.assertTrue(self.blocked("nmap", ["-sn", "10.10.10-11.5"]))
+
+    def test_nmap_octet_range_covering_slash8_blocked(self):
+        self.assertTrue(self.blocked("nmap", ["-sn", "10.0-255.0-255.1-254"]))
+
+    def test_nmap_octet_list_and_wildcard_blocked(self):
+        self.assertTrue(self.blocked("nmap", ["-sn", "10.10.10,11.5"]))
+        self.assertTrue(self.blocked("nmap", ["-sn", "10.10.*.5"]))
+
+    def test_integer_hex_and_shorthand_ips_blocked(self):
+        for tok in ("167772161", "0x0a000001", "10.1", "010.010.010.005"):
+            with self.subTest(tok=tok):
+                self.assertTrue(self.blocked("nmap", ["-sn", "10.10.10.5", tok]))
+
+    def test_unlisted_single_label_host_blocked(self):
+        self.assertTrue(self.blocked("nmap", ["-sn", "10.10.10.5", "localhost"]))
+
+    def test_ipv6_outside_scope_blocked(self):
+        self.assertTrue(self.blocked("httpx", ["-u", "http://[2001:db8::1]"]))
+        self.assertTrue(self.blocked("nmap", ["-sn", "::ffff:8.8.8.8"]))
+
+    def test_url_userinfo_trick_blocked(self):
+        self.assertTrue(self.blocked("httpx", ["-u", "http://10.10.10.5@8.8.8.8"]))
+
+    def test_cidr_wider_than_scope_blocked(self):
+        self.assertTrue(self.blocked("nmap", ["-sn", "10.10.10.5/16"]))
+
+    def test_dig_server_out_of_scope_blocked(self):
+        self.assertTrue(self.blocked("dig", ["@8.8.8.8", "lab.local"]))
+
+    def test_declared_target_alone_is_not_enough(self):
+        # args with no target at all can't be vouched for by the declaration
+        self.assertTrue(self.blocked("nmap", ["-sn"]))
+
+    def test_without_binary_is_stricter_not_looser(self):
+        d = self.g.check(["10.10.10.5"], ["-sn", "10.0-255.0-255.1-254"])
+        self.assertFalse(d.allowed)
+
+    # -- flags that write files or sidestep the script allowlist ------------
+    def test_nmap_output_to_file_blocked(self):
+        self.assertTrue(self.blocked("nmap", ["-sV", "10.10.10.5", "-oN", "/home/u/.bashrc"]))
+        self.assertTrue(self.blocked("nmap", ["-sV", "10.10.10.5", "-oX", "/tmp/x.xml"]))
+
+    def test_whatweb_log_file_blocked(self):
+        self.assertTrue(self.blocked(
+            "whatweb", ["--log-json=/home/u/.ssh/authorized_keys", "10.10.10.5"]))
+
+    def test_default_script_set_flags_blocked(self):
+        self.assertTrue(self.blocked("nmap", ["-A", "10.10.10.5"]))
+        self.assertTrue(self.blocked("nmap", ["-sC", "10.10.10.5"]))
+
+    def test_unsafe_script_via_equals_form_blocked(self):
+        self.assertTrue(self.blocked("nmap", ["--script=vuln", "10.10.10.5"]))
+
+    def test_flag_values_are_validated(self):
+        self.assertTrue(self.blocked("nmap", ["-p", "80;id", "10.10.10.5"]))
+        self.assertTrue(self.blocked("nmap", ["-p", "99999", "10.10.10.5"]))
+        self.assertTrue(self.blocked("nmap", ["--min-rate", "fast", "10.10.10.5"]))
+        self.assertTrue(self.blocked("whatweb", ["-a", "9", "10.10.10.5"]))
+
+    # -- legitimate recon must keep working ---------------------------------
+    def test_legit_commands_still_allowed(self):
+        ok = [
+            ("nmap", ["-sn", "10.10.10.0/24"], ["10.10.10.0/24"]),
+            ("nmap", ["-p-", "--min-rate", "1000", "--open", "10.10.10.5"], ["10.10.10.5"]),
+            ("nmap", ["-sV", "-p", "22,80,445", "10.10.10.5"], ["10.10.10.5"]),
+            ("nmap", ["-sV", "-p80,443", "-Pn", "-T4", "10.10.10.5"], ["10.10.10.5"]),
+            ("nmap", ["--script", "http-title", "-p", "80,443", "10.10.10.5"], ["10.10.10.5"]),
+            ("nmap", ["-sV", "10.10.10.5", "-oX", "-"], ["10.10.10.5"]),
+            ("httpx", ["-u", "http://10.10.10.5:8080/", "-title", "-json"], ["10.10.10.5"]),
+            ("whatweb", ["-a", "1", "10.10.10.5"], ["10.10.10.5"]),
+            ("whatweb", ["--color=never", "https://lab.local"], ["lab.local"]),
+            ("dig", ["@10.10.10.5", "lab.local", "axfr"], ["10.10.10.5"]),
+            ("dig", ["+short", "-t", "MX", "lab.local"], ["lab.local"]),
+        ]
+        for binary, args, declared in ok:
+            with self.subTest(cmd=" ".join([binary, *args])):
+                self.assertTrue(self.allowed(binary, args, declared))
+
+    def test_every_rule_brain_command_passes_the_guard(self):
+        # the deterministic brain is also the LLM fallback: it must never be blocked
+        from hannibal.brain import rule_decompose
+        scope = ["10.10.10.5", "10.10.10.0/24"]
+        g = ScopeGuard(scope)
+        host = [Finding("host", "10.10.10.5", "up", {}),
+                Finding("port", "10.10.10.5:80", "open", {"port": 80}, None, "10.10.10.5")]
+        for goal in ("host discovery across the scope", "port scan on 10.10.10.5",
+                     "service and version enumeration on 10.10.10.5",
+                     "web fingerprinting on 10.10.10.5", "something unknown"):
+            for spec in rule_decompose(goal, host, scope):
+                with self.subTest(cmd=spec.as_cmdline()):
+                    self.assertIsNone(validate(spec))
+                    self.assertTrue(g.check(spec.targets, spec.args, spec.binary).allowed)
+
+    def test_bad_scope_entry_refused(self):
+        with self.assertRaises(ScopeError):
+            ScopeGuard(["10.10.10-11.0"])
+
+
+class TestHijackedBrainEndToEnd(unittest.TestCase):
+    """Agent level, not detector level: assume the injection WORKED and the
+    model now proposes the bypass. Nothing out of scope may execute."""
+
+    def test_hijacked_brain_cannot_execute_bypass(self):
+        import json
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        from hannibal.brain import MockBrain
+
+        evil = [
+            CommandSpec("nmap", ["-sn", "10.10.10-11.0-255"], ["10.10.10.5"], "hijacked"),
+            CommandSpec("nmap", ["-sV", "10.10.10.5", "-oN", "/tmp/pwned"], ["10.10.10.5"], "hijacked"),
+            CommandSpec("httpx", ["-u", "http://10.10.10.5@8.8.8.8"], ["10.10.10.5"], "hijacked"),
+        ]
+
+        class HijackedBrain(MockBrain):
+            def decompose(self, goal, findings, scope):
+                return list(evil)
+
+        with tempfile.TemporaryDirectory() as d:
+            o = Orchestrator(RunConfig(objective="m", scope=["10.10.10.0/24"],
+                                       backend="mock", quiet=True, workdir=d,
+                                       max_rounds=2))
+            o.brain = HijackedBrain()
+            o.run()
+            with open(os.path.join(d, "audit.log"), encoding="utf-8") as fh:
+                events = [json.loads(line) for line in fh if line.strip()]
+        executed = [e["data"]["cmd"] for e in events if e["event"] == "command_exec"]
+        self.assertEqual(executed, [])
+        blocked = [e for e in events
+                   if e["event"] == "command_blocked"
+                   or (e["event"] == "scope_decision" and not e["data"]["allowed"])]
+        self.assertGreaterEqual(len(blocked), len(evil))
+
+
 if __name__ == "__main__":
     unittest.main()

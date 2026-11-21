@@ -106,7 +106,7 @@ class Orchestrator:
             return
 
         # 2. scope guard
-        decision = self.scope.check(spec.targets, spec.args)
+        decision = self.scope.check(spec.targets, spec.args, binary=spec.binary)
         self.audit.record("scope_decision", task=task.id, cmd=spec.as_cmdline(),
                           allowed=decision.allowed, reason=decision.reason,
                           checked=decision.checked)
