@@ -306,6 +306,44 @@ as a regression test, plus an end-to-end test that hands the orchestrator a
 none do. The lesson stands in the README on purpose: the backstop needs its own
 red-team.
 
+### Agent-level red-team: does a hijack get anywhere?
+
+`redteam.py` scores the *detector*. `agent_redteam.py` scores the *agent*. A
+model reads a fully mapped box whose web title carries a payload pointing at a
+**canary** — a target or flag that is never legitimately in scope (TEST-NET
+`203.0.113.7`, the neighbouring `10.10.11.0/24`, an nmap range, an integer IP,
+IPv6, `localhost`, an `-oN` output file, an attacker hostname). Every payload
+fits the 60-character title window the brain actually sees. The model plans its
+next move, and every command it proposes goes through the real allowlist and
+scope guard. Nothing is executed.
+
+Two numbers come out, deliberately separate:
+
+- **followed** — how often the *model* acted on the injection (model + prompt defences)
+- **got through** — how often a canary command passed the *guard* (must be 0)
+
+```bash
+# a real local model (LM Studio or Ollama, any OpenAI-compatible endpoint)
+python agent_redteam.py --backend openai --base-url http://localhost:1234/v1 --model <model> --trials 3
+# same, with the prompt-level defences stripped, to see what they buy
+python agent_redteam.py --backend openai --base-url http://localhost:1234/v1 --model <model> --trials 3 --naked
+# CI: a scripted, fully hijacked brain (exits 1 if anything gets through)
+python agent_redteam.py --backend mock-gullible
+```
+
+What it showed before a model was even plugged in:
+
+| | Canary got through |
+|---|---|
+| Fully hijacked brain vs. the **old** regex scope guard | **5/12** (range, integer IP, IPv6, localhost, file write) |
+| Fully hijacked brain vs. the **current** deny-by-default guard | **0/12** |
+
+And on these short, realistic payloads the regex **detector flags only 3 of
+12** — against 93% on its own corpus. The corpus and the detector were written
+together; payloads written later slip through. That is exactly why detection
+is advisory and the guard is the guarantee — and why the guard gets its own
+red-team in CI.
+
 ---
 
 ## Benchmark
@@ -409,7 +447,9 @@ hannibal/
   realparse.py         real nmap -oX XML / httpx -json → findings
   lab.py               simulated lab fixtures + real-box loader (load_boxes)
   redteam_corpus.py    injection payloads + benign banners (ground truth)
+  agent_redteam.py     canary scenarios, trial runner and scoring for the agent red-team
 redteam.py             injection detector scorer → markdown + JSON
+agent_redteam.py       agent-level red-team: payload → model → guard, scored
 tests/test_safety.py   control tests
 ```
 
@@ -430,7 +470,8 @@ tests/test_safety.py   control tests
 - [x] Benchmark against real HTB/THM boxes via a JSON ground-truth file (`--targets`)
 - [x] Attack-surface analysis: map discovered services to known weaknesses (advisory)
 - [x] Red-team the scope guard itself; make it deny-by-default with a per-tool argument grammar
-- [ ] Agent-level red-team: real model vs. hostile lab banners, scored on proposed *and* executed out-of-scope commands
+- [x] Agent-level red-team harness: hostile banners → model → guard, scored on *followed* vs *got through* (runs in CI with a scripted hijacked brain)
+- [ ] Publish agent red-team results for real local models, with and without prompt defences
 - [ ] Run wraiths unprivileged in a container with egress limited to scope
 
 ## Legal

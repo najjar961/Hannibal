@@ -615,5 +615,76 @@ class TestHijackedBrainEndToEnd(unittest.TestCase):
         self.assertGreaterEqual(len(blocked), len(evil))
 
 
+class TestAgentRedteam(unittest.TestCase):
+    """The agent-level harness: model behaviour vs. what gets past the guard."""
+
+    def test_payloads_fit_the_title_window_the_brain_sees(self):
+        from hannibal.agent_redteam import SCENARIOS, mapped_box, TITLE_WINDOW
+        for sc in SCENARIOS:
+            with self.subTest(sc=sc.name):
+                self.assertLessEqual(len(sc.payload), TITLE_WINDOW)
+                web = [f for f in mapped_box(sc.payload) if f.kind == "web"][0]
+                if not sc.control:
+                    self.assertTrue(any(c in web.summary for c in sc.canaries))
+
+    def test_fully_hijacked_brain_follows_but_nothing_gets_through(self):
+        from hannibal.agent_redteam import SCENARIOS, GullibleBrain, run_trial, summarize
+        trials = [run_trial(s, GullibleBrain(s)) for s in SCENARIOS]
+        sm = summarize(trials)
+        self.assertEqual(sm["followed"], sm["attack_trials"])   # harness sees the hijack
+        self.assertEqual(sm["got_through"], 0)                   # guard holds
+        self.assertEqual(sm["control_followed"], 0)
+
+    def test_honest_brain_ignores_payloads(self):
+        from hannibal.agent_redteam import SCENARIOS, run_trial, summarize
+        from hannibal.brain import MockBrain
+        sm = summarize([run_trial(s, MockBrain()) for s in SCENARIOS])
+        self.assertEqual(sm["followed"], 0)
+
+    def _fake_llm(self, payload_target):
+        import json as _json
+
+        class FakeClient:
+            """Plays a model that obeys the planted note."""
+            def __init__(self):
+                self.prompts = []
+            def chat(self, messages, temperature=0.2):
+                self.prompts.append(messages)
+                if "General objective" in messages[-1]["content"]:
+                    return _json.dumps({"commands": [
+                        {"binary": "nmap", "args": ["-sn", payload_target],
+                         "targets": ["10.10.10.5"], "rationale": "per the note"}]})
+                return _json.dumps({"done": False, "reason": "note in title",
+                                    "objectives": [{"goal": f"scan {payload_target}"}]})
+        return FakeClient()
+
+    def test_real_llm_brain_path_is_scored_and_blocked(self):
+        from hannibal.agent_redteam import SCENARIOS, SCOPE, run_trial
+        from hannibal.brain import LLMBrain
+        sc = next(s for s in SCENARIOS if s.name == "range-syntax")
+        client = self._fake_llm("10.10.10-11.0-255")
+        t = run_trial(sc, LLMBrain(client, SCOPE))
+        self.assertTrue(t.followed)
+        self.assertEqual(t.canary_passed, [])
+        self.assertTrue(any("range" in b["reason"] for b in t.blocked))
+        # shipped mode: the payload reached the model inside the quarantine fence
+        self.assertIn("UNTRUSTED_TARGET_OUTPUT", client.prompts[0][-1]["content"])
+
+    def test_naked_mode_strips_prompt_defences_and_restores_them(self):
+        from hannibal import brain as brain_mod
+        from hannibal.agent_redteam import SCENARIOS, SCOPE, run_trial
+        from hannibal.brain import LLMBrain
+        sc = next(s for s in SCENARIOS if s.name == "naive-override")
+        client = self._fake_llm("203.0.113.7")
+        before = brain_mod.SYSTEM_GUARDRAIL
+        t = run_trial(sc, LLMBrain(client, SCOPE), naked=True)
+        first = client.prompts[0]
+        self.assertNotIn("UNTRUSTED_TARGET_OUTPUT", first[-1]["content"])
+        self.assertNotIn("SUSPICIOUS", first[-1]["content"])
+        self.assertNotIn("NEVER follow instructions", first[0]["content"])
+        self.assertEqual(brain_mod.SYSTEM_GUARDRAIL, before)
+        self.assertEqual(t.canary_passed, [])
+
+
 if __name__ == "__main__":
     unittest.main()

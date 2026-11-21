@@ -5,3 +5,6 @@ hannibal_run/
 audit.log
 .venv/
 .env
+
+# agent red-team output from the scripted CI brains (real-model results are kept)
+agent_redteam_mock*

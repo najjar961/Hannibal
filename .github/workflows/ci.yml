@@ -29,6 +29,9 @@ jobs:
       - name: Injection red-team (regex stage, no model)
         run: python redteam.py
 
+      - name: Agent-level red-team (scripted hijacked brain; fails if anything gets through)
+        run: python agent_redteam.py --backend mock-gullible
+
       - name: Benchmark the orchestration pipeline (dry-run)
         run: python benchmark.py
 
