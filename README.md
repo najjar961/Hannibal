@@ -575,7 +575,7 @@ tests/test_safety.py   control tests
 - [x] Map every injection attack class to its OWASP LLM Top 10 (2025) risk
 - [x] Findings dedup + "which clue led to which" edges surfaced in the report
 - [x] Benchmark against real HTB/THM boxes via a JSON ground-truth file (`--targets`)
-- [x] Attack-surface analysis: map discovered services to known weaknesses (advisory)
+- [x] Attack-surface analysis: map discovered services to known weaknesses (advisory) — now runs automatically after every campaign, not just on demand
 - [x] Red-team the scope guard itself; make it deny-by-default with a per-tool argument grammar
 - [x] Agent-level red-team harness: hostile banners → model → guard, scored on *followed* vs *got through* (runs in CI with a scripted hijacked brain)
 - [x] Midrecon box mode so the agent red-team measures real model following (honest next step exists), not passivity

@@ -28,6 +28,7 @@ from .scope import ScopeGuard
 from .store import Store, to_mermaid
 from .brain import Brain, MockBrain, LLMBrain, coverage_next
 from .validator import validate_findings, validation_counts
+from .analysis import analyze, summarize
 from .llm import LLMClient
 from .semantic import LLMJudge
 from . import commands as cmd
@@ -63,6 +64,7 @@ class Orchestrator:
         self._print_lock = threading.Lock()
         self.stopped_reason = ""
         self.validated_counts = (0, 0)    # (confirmed, total) vuln findings
+        self.weaknesses: list = []        # known-weakness leads (advisory)
         self._phase_attempts: dict = {}   # objective goal -> times issued
 
     def _note_inconclusive(self, goal: str) -> None:
@@ -302,6 +304,22 @@ class Orchestrator:
             self.validated_counts = (confirmed, total)
             self._log(f"\nvalidated: {confirmed}/{total} detection(s) confirmed "
                       f"from evidence ({total - confirmed} need manual review)")
+
+        # known-weakness check: after recon and attack, match the discovered
+        # OS/service versions against a curated signature base (offline,
+        # advisory — no new traffic, no exploit). The "what's known-bad about
+        # what we found" pass a pentester does next.
+        self.weaknesses = analyze(self.store.all_findings())
+        if self.weaknesses:
+            wc = summarize(self.weaknesses)
+            head = " · ".join(f"{wc[s]} {s}" for s in
+                              ("critical", "high", "medium", "low", "info") if wc[s])
+            self._log(f"\nknown-weakness check: {len(self.weaknesses)} advisory "
+                      f"lead(s) ({head}) — verify manually")
+            for w in self.weaknesses[:6]:
+                ref = f" [{w.cve}]" if w.cve else ""
+                self._log(f"  {w.severity.upper():8} {w.host}:{w.port} {w.title}{ref}")
+            self.audit.record("weakness_scan", leads=len(self.weaknesses), counts=wc)
 
         counts = self.store.counts()
         # expose final metrics for the benchmark harness

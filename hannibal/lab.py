@@ -79,6 +79,15 @@ LAB: Dict[str, BoxProfile] = {
         "10.10.10.9", {22: "ssh", 53: "domain"},
         {22: "OpenSSH 7.6", 53: "ISC BIND 9.11"},
         web_title="", injection=False),
+    # a deliberately old, Metasploitable-flavoured host: no web surface (so it
+    # is not attacked), but its service banners are riddled with known CVEs for
+    # the post-recon known-weakness pass to flag
+    "10.10.10.13": BoxProfile(
+        "10.10.10.13",
+        {21: "ftp", 22: "ssh", 23: "telnet", 139: "netbios-ssn", 445: "microsoft-ds"},
+        {21: "vsftpd 2.3.4", 22: "OpenSSH 4.7p1 Debian", 23: "Linux telnetd",
+         139: "Samba smbd 3.0.20-Debian", 445: "Samba smbd 3.0.20-Debian"},
+        web_title="", injection=False),
 }
 
 

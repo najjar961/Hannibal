@@ -1010,5 +1010,41 @@ class TestWatchMode(unittest.TestCase):
         self.assertIn("10.10.11.50", table)
 
 
+class TestKnownWeaknessPass(unittest.TestCase):
+    """After recon+attack, the run auto-flags known CVEs for discovered versions."""
+
+    def test_run_surfaces_known_weaknesses(self):
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        with tempfile.TemporaryDirectory() as d:
+            orch = Orchestrator(RunConfig(
+                objective="map", backend="mock", quiet=True, workdir=d,
+                scope=["10.10.10.0/24"]))
+            orch.run()
+            titles = {w.title for w in orch.weaknesses}
+            cves = {w.cve for w in orch.weaknesses}
+            # the old Metasploitable-flavoured host lights up the signature base
+            self.assertIn("vsftpd 2.3.4 backdoor", titles)
+            self.assertIn("CVE-2011-2523", cves)
+            # it is advisory only — never promoted to a confirmed vuln finding
+            from hannibal.store import Store
+            s = Store(orch.cfg.db_path)
+            kinds = {f.kind for f in s.all_findings()}
+            s.close()
+            self.assertNotIn("weakness", kinds)
+
+    def test_weakness_scan_audited(self):
+        import json
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        with tempfile.TemporaryDirectory() as d:
+            orch = Orchestrator(RunConfig(objective="map", backend="mock",
+                                          quiet=True, workdir=d, scope=["10.10.10.0/24"]))
+            orch.run()
+            with open(os.path.join(d, "audit.log"), encoding="utf-8") as fh:
+                events = [json.loads(l)["event"] for l in fh if l.strip()]
+            self.assertIn("weakness_scan", events)
+
+
 if __name__ == "__main__":
     unittest.main()
