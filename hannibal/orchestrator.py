@@ -27,6 +27,7 @@ from .budget import Budget
 from .scope import ScopeGuard
 from .store import Store, to_mermaid
 from .brain import Brain, MockBrain, LLMBrain, coverage_next
+from .validator import validate_findings, validation_counts
 from .llm import LLMClient
 from .semantic import LLMJudge
 from . import commands as cmd
@@ -61,6 +62,7 @@ class Orchestrator:
         self.judge = self._build_judge()
         self._print_lock = threading.Lock()
         self.stopped_reason = ""
+        self.validated_counts = (0, 0)    # (confirmed, total) vuln findings
         self._phase_attempts: dict = {}   # objective goal -> times issued
 
     def _note_inconclusive(self, goal: str) -> None:
@@ -283,6 +285,24 @@ class Orchestrator:
 
     def _finish(self) -> None:
         state = self.budget.state()
+
+        # validate detections before reporting: corroborate each vuln from the
+        # evidence it already produced (non-destructive — no new traffic, no
+        # exploitation). A confirmed finding is one an operator can trust; the
+        # rest are flagged for manual review instead of reported as fact.
+        all_f = self.store.all_findings()
+        vulns = [f for f in all_f if f.kind == "vuln"]
+        if vulns:
+            for f in validate_findings(vulns):
+                self.store.add_finding(f)
+                self.audit.record("validation", target=f.target,
+                                  validated=bool(f.data.get("validated")),
+                                  reason=f.data.get("validation", ""))
+            confirmed, total = validation_counts(vulns)
+            self.validated_counts = (confirmed, total)
+            self._log(f"\nvalidated: {confirmed}/{total} detection(s) confirmed "
+                      f"from evidence ({total - confirmed} need manual review)")
+
         counts = self.store.counts()
         # expose final metrics for the benchmark harness
         self.final_state = state

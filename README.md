@@ -189,8 +189,17 @@ Evidence comes from the target, so every `vuln` finding is injection-scanned.
 In the simulated lab every web box has planted weaknesses, so the attack phase
 is scored against ground truth (5/5 found, 1 hostile payload quarantined).
 
-A `nuclei` match is a **detection, not proof**: findings carry
-`validated: false` until a validator Wraith confirms them (roadmap).
+A `nuclei` match is a **detection, not proof**. A validation pass then
+corroborates each detection from the evidence it already collected — an
+env-file hit must actually contain `KEY=value` secret lines, a git hit must be
+a real git config, and so on — and marks it **CONFIRMED** or **unconfirmed**
+(the latter flagged for manual review). It is non-destructive: no new traffic,
+no exploitation. Evidence that tripped the injection scanner is never
+auto-confirmed, because it is attacker-controlled. In the lab, 4 of 5 planted
+detections confirm and the one with a hostile payload in its evidence is held
+for review. The false-positive rate is what makes an automated pentest
+trustworthy, so this is the number the benchmark tracks. Exploit-based proof is
+deliberately out of scope — a real exploit attempt is a human decision.
 
 ---
 
@@ -505,6 +514,7 @@ hannibal/
   budget.py            kill-switch / budgets
   store.py             SQLite queue + findings graph (Mermaid export)
   htmlreport.py        self-contained HTML scan report
+  validator.py         corroborate detections from their evidence (non-destructive)
   parse.py             simulator output → structured findings
   realparse.py         real nmap -oX XML / httpx -json / nuclei -jsonl → findings
   lab.py               simulated lab fixtures + real-box loader (load_boxes)
@@ -536,7 +546,7 @@ tests/test_safety.py   control tests
 - [x] Midrecon box mode so the agent red-team measures real model following (honest next step exists), not passivity
 - [x] Rules of engagement: risk tiers + approval gate (hold / prompt / lab auto-clear)
 - [x] First attack-tier Wraith: `nuclei` vulnerability scan, scored against planted lab weaknesses
-- [ ] Validator Wraith: confirm each detection with a minimal proof before it counts
+- [x] Validator: confirm each detection from its own evidence before it counts (non-destructive; injection-tainted evidence never auto-confirms)
 - [ ] Continuous watch mode: re-attack only what changed, measure time-to-detection
 - [ ] Live *followed* numbers from an instruct model that plans (the uncensored chat tunes tested declared recon done regardless)
 - [ ] Run wraiths unprivileged in a container with egress limited to scope

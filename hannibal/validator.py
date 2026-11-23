@@ -1,0 +1,111 @@
+"""Finding validator — turn raw detections into confirmed findings.
+
+A nuclei match is a *detection*: the scanner saw a pattern that *suggests* a
+weakness. Before a detection is reported as real it should be corroborated, so
+an operator reads a short list of confirmed issues instead of wading through
+scanner noise. The false-positive rate is the single number that decides
+whether anyone trusts an automated pentest, so this is where the trust is won.
+
+This validator is deliberately NON-destructive and adds no new capability. It
+does not exploit anything and sends no new traffic of its own — it re-examines
+the evidence a detection already produced and decides, by a deterministic rule
+per detection class, whether that evidence actually corroborates the claim.
+Exploit-based proof is intentionally out of scope for this tool, which stays
+detection-and-validation only; a real exploit attempt is a human decision.
+
+Outcome per `vuln` finding:
+  * validated=True  — the evidence corroborates the claim (e.g. an env-file
+    detection whose body actually contains KEY=value secret lines)
+  * validated=False — detected but not corroborated; flagged for manual review
+Each carries a short, human-readable reason in `data["validation"]`.
+
+A finding whose evidence tripped the injection scanner is never auto-validated:
+the evidence is attacker-controlled, so a human reads it instead.
+"""
+from __future__ import annotations
+
+import re
+from typing import List, Tuple
+
+from .types import Finding
+
+# an uppercase KEY = value line, the shape of a leaked secret in a .env / config
+_KEYVAL = re.compile(r"[A-Z][A-Z0-9_]{2,}\s*=\s*\S")
+
+
+def _corroborates(template: str, evidence: str) -> Tuple[bool, str]:
+    """Does the collected evidence actually back up this detection class?
+
+    Deny by default: a detection class with no rule here, or whose evidence
+    lacks the expected markers, stays unconfirmed. Being honest that we *can't*
+    confirm something is the whole point — a false 'confirmed' is worse than an
+    honest 'needs review'.
+    """
+    t = template.lower()
+    low = evidence.lower()
+
+    def has(*subs: str) -> bool:
+        return any(s.lower() in low for s in subs)
+
+    if "env" in t:
+        if _KEYVAL.search(evidence):
+            return True, "response body contains KEY=value secret lines"
+        return False, "no secret-looking KEY=value lines in the response"
+    if "git" in t:
+        if has("[core]", "repositoryformatversion", "url =", "[remote"):
+            return True, "response body is a real git config"
+        return False, "response lacked git-config markers"
+    if "phpinfo" in t:
+        if has("php version", "phpinfo()"):
+            return True, "page carries the phpinfo() banner"
+        return False, "no phpinfo() banner in the page"
+    if "dir" in t or "listing" in t:
+        if has("index of", "parent directory"):
+            return True, "directory-index markup present"
+        return False, "no directory-index markers"
+    if "swagger" in t or "openapi" in t or "api" in t:
+        if has("swagger", "openapi", '"paths"', "api"):
+            return True, "API / Swagger documentation markers present"
+        return False, "no API-doc markers in the response"
+    if "ssl" in t or "tls" in t or "cert" in t:
+        return False, "certificate findings need manual review"
+    return False, "no corroboration rule for this detection type — manual review"
+
+
+def validate_finding(f: Finding) -> Tuple[bool, str]:
+    """Validate a single `vuln` finding from its own evidence."""
+    if f.kind != "vuln":
+        return False, ""
+    if f.suspicious:
+        # attacker-controlled evidence that tripped the injection scanner is
+        # exactly what we must NOT trust to auto-confirm anything
+        return False, "evidence quarantined (possible injection) — manual review"
+    evidence = f.data.get("evidence") or []
+    text = " ".join(str(e) for e in evidence)
+    if not text.strip():
+        return False, "detection produced no evidence to corroborate"
+    return _corroborates(str(f.data.get("template", "")), text)
+
+
+def validate_findings(findings: List[Finding]) -> List[Finding]:
+    """Annotate every `vuln` finding in place with its validation outcome.
+
+    Idempotent: the summary marker is rewritten, not appended, so running this
+    twice does not stack ' — CONFIRMED — CONFIRMED'.
+    """
+    for f in findings:
+        if f.kind != "vuln":
+            continue
+        ok, reason = validate_finding(f)
+        f.data["validated"] = ok
+        f.data["validation"] = reason
+        base = f.summary.split("  —  ")[0]
+        f.summary = f"{base}  —  {'CONFIRMED' if ok else 'unconfirmed'}"
+    return findings
+
+
+def validation_counts(findings: List[Finding]) -> Tuple[int, int]:
+    """(confirmed, total) over the `vuln` findings."""
+    vulns = [f for f in findings if f.kind == "vuln"]
+    confirmed = sum(1 for f in vulns if f.data.get("validated"))
+    return confirmed, len(vulns)
