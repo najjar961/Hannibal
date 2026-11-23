@@ -1046,5 +1046,68 @@ class TestKnownWeaknessPass(unittest.TestCase):
             self.assertIn("weakness_scan", events)
 
 
+class TestEvalScorecard(unittest.TestCase):
+    """Full-pipeline scoring against ground truth — the measurable trend."""
+
+    def test_score_is_pure_and_correct(self):
+        from hannibal.eval import score
+        from hannibal.lab import BoxProfile
+        from hannibal.analysis import Weakness
+        lab = {"10.0.0.1": BoxProfile("10.0.0.1", {80: "http"}, {80: "nginx"},
+                                      vulns=[{"id": "a"}, {"id": "b"}])}
+        findings = [
+            Finding("service", "10.0.0.1:80", "nginx",
+                    {"port": 80, "version": "nginx"}, parent_target="10.0.0.1"),
+            Finding("vuln", "u [a]", "a", {"template": "a", "validated": True},
+                    parent_target="10.0.0.1"),
+            Finding("vuln", "u [b]", "b", {"template": "b", "validated": False},
+                    parent_target="10.0.0.1"),
+        ]
+        w = [Weakness("10.0.0.1", 80, "http", "high", "t", "CVE-1", "e", "n")]
+        card = score(findings, w, lab=lab, expected_cves={"10.0.0.1": {"CVE-1"}})
+        self.assertEqual(card["vuln_recall"], 1.0)     # both planted found
+        self.assertEqual(card["val_recall"], 0.5)      # 1 of 2 confirmed
+        self.assertEqual(card["val_precision"], 1.0)   # the confirmed one is real
+        self.assertEqual(card["cve_lead_recall"], 1.0)
+
+    def test_precision_catches_a_false_confirm(self):
+        from hannibal.eval import score
+        from hannibal.lab import BoxProfile
+        lab = {"10.0.0.1": BoxProfile("10.0.0.1", {80: "http"}, {80: "nginx"},
+                                      vulns=[{"id": "a"}])}
+        findings = [
+            Finding("vuln", "u [a]", "a", {"template": "a", "validated": True},
+                    parent_target="10.0.0.1"),
+            Finding("vuln", "u [ghost]", "g", {"template": "ghost", "validated": True},
+                    parent_target="10.0.0.1"),   # confirmed but never planted
+        ]
+        card = score(findings, [], lab=lab, expected_cves={})
+        self.assertEqual(card["val_precision"], 0.5)
+
+    def test_run_eval_over_sim_lab(self):
+        from hannibal.eval import run_eval
+        with tempfile.TemporaryDirectory() as d:
+            card = run_eval(workdir=d)
+        self.assertEqual(card["port_recall"], 1.0)
+        self.assertEqual(card["vuln_recall"], 1.0)     # all 5 planted found
+        self.assertEqual(card["val_recall"], 0.8)      # 4/5 confirmed (1 tainted, held)
+        self.assertEqual(card["val_precision"], 1.0)   # nothing false-confirmed
+        self.assertEqual(card["cve_lead_recall"], 1.0)
+
+    def test_history_and_delta_render(self):
+        from hannibal.eval import append_history, render
+        import json
+        base = {"backend": "mock", "svc_recall": 0.5, "vuln_recall": 0.5,
+                "val_recall": 0.5, "val_precision": 0.5, "cve_lead_recall": 0.5,
+                "planted_vulns": 1, "confirmed": 0}
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "h.jsonl")
+            append_history({**base, "port_recall": 0.5}, p)
+            append_history({**base, "port_recall": 0.9}, p)
+            hist = [json.loads(l) for l in open(p, encoding="utf-8")]
+            out = render(hist[-1], hist)
+        self.assertIn("+0.4", out)   # port recall improved 0.5 -> 0.9
+
+
 if __name__ == "__main__":
     unittest.main()

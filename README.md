@@ -451,6 +451,38 @@ guarantee, and it holds whatever the model does.**
 
 ---
 
+## Scorecard
+
+`hannibal eval` scores the **whole pipeline** against the lab's ground truth in
+one shot — recon, attack, validation quality, and known-CVE leads — and appends
+each run to a history file, so a change shows up as a moving number instead of a
+hunch. It's the measurement loop: change a rule or prompt, re-run, see the
+effect.
+
+```
+HANNIBAL SCORECARD — backend=mock
+──────────────────────────────────────────────────────────
+recon — port recall                         1.00 ████████████████████
+recon — service recall                      1.00 ████████████████████
+attack — planted-vuln recall                1.00 ████████████████████
+validation — confirmed of planted           0.80 ████████████████····
+validation — precision (no false confirms)  1.00 ████████████████████
+known-CVE — expected leads raised           1.00 ████████████████████
+```
+
+Precision is the one that matters most: it is 1.00 because the validator never
+confirms a detection it can't corroborate — the one unconfirmed planted vuln is
+the injection-tainted finding, deliberately held for manual review rather than
+rubber-stamped. On repeat runs each line shows its delta against the previous
+run.
+
+```bash
+hannibal eval                       # score the sim lab, append to eval_history.jsonl
+hannibal eval --backend ollama      # score a real model's planning the same way
+```
+
+---
+
 ## Benchmark
 
 `benchmark.py` runs Hannibal against every box in the simulated lab and scores
@@ -548,6 +580,7 @@ hannibal/
   budget.py            kill-switch / budgets
   store.py             SQLite queue + findings graph (Mermaid export)
   htmlreport.py        self-contained HTML scan report
+  eval.py              full-pipeline scorecard vs ground truth + run history
   watch.py             continuous monitor loop + simulated-lab vuln injector
   validator.py         corroborate detections from their evidence (non-destructive)
   parse.py             simulator output → structured findings

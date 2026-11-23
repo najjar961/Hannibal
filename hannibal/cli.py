@@ -98,6 +98,25 @@ def cmd_watch(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_eval(a: argparse.Namespace) -> int:
+    import json
+    from .eval import run_eval, append_history, render
+    card = run_eval(backend=a.backend, model=a.model, base_url=a.base_url,
+                    api_key=a.api_key or "")
+    history = []
+    if a.history:
+        append_history(card, a.history)
+        try:
+            with open(a.history, encoding="utf-8") as fh:
+                history = [json.loads(l) for l in fh if l.strip()]
+        except OSError:
+            pass
+    print("\n" + render(card, history))
+    if a.history:
+        print(f"\nappended to {a.history} ({len(history)} run(s) recorded)")
+    return 0
+
+
 def cmd_verify(a: argparse.Namespace) -> int:
     import os
     path = a.path if a.path.endswith(".log") else os.path.join(a.path, "audit.log")
@@ -221,6 +240,16 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--approve", default="deny", choices=["deny", "prompt"])
     w.add_argument("--workdir", default="hannibal_watch")
     w.set_defaults(func=cmd_watch)
+
+    e = sub.add_parser("eval", help="score the full pipeline against lab ground truth")
+    e.add_argument("--backend", default="mock", choices=["mock", "ollama", "openai"])
+    e.add_argument("--model", default="qwen3:8b")
+    e.add_argument("--base-url", default="http://localhost:11434/v1")
+    e.add_argument("--api-key", default="")
+    e.add_argument("--history", default="eval_history.jsonl",
+                   help="append each run here to track the trend "
+                        "(empty string to skip)")
+    e.set_defaults(func=cmd_eval)
 
     v = sub.add_parser("verify-audit", help="verify the audit hash-chain")
     v.add_argument("path", help="run directory or path to audit.log")
