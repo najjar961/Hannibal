@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 from .store import Store, to_mermaid
 from .audit import AuditLog
 from .types import Finding
+from .analysis import remediation_for_vuln
 
 _KIND_ORDER = {"vuln": -1, "host": 0, "port": 1, "service": 2, "web": 3, "note": 4}
 
@@ -94,11 +95,13 @@ def _vuln_rows(vulns: List[Finding]) -> str:
             eh = f'<div class="ev">{items}</div>'
         name = html.escape(f.summary.split("  —  ")[0])
         where = html.escape(str(d.get("matched_at", f.target)))
-        tmpl = html.escape(str(d.get("template", "")))
+        tmpl = str(d.get("template", ""))
+        fix = remediation_for_vuln(tmpl, sev)
+        rem = f'<div class="fix"><b>Recommendation:</b> {html.escape(fix)}</div>' if fix else ""
         rows.append(
             f'<tr><td><span class="sev sev--{sev}">{sev}</span></td>'
-            f'<td>{name}<div class="note">{reason}</div>{eh}</td>'
-            f'<td class="mono">{where}<div class="note">{tmpl}</div></td>'
+            f'<td>{name}<div class="note">{reason}</div>{eh}{rem}</td>'
+            f'<td class="mono">{html.escape(where)}<div class="note">{html.escape(tmpl)}</div></td>'
             f'<td>{status}</td></tr>')
     return "\n".join(rows)
 
@@ -122,17 +125,19 @@ def build_html(workdir: str) -> str:
     vulns = [f for f in findings if f.kind == "vuln"]
 
     # attack-surface analysis (read-only, advisory)
-    from .analysis import analyze, summarize
+    from .analysis import analyze, summarize, remediation_for_vuln
     weaknesses = analyze(findings)
     wcounts = summarize(weaknesses)
     wrows = []
     for w in weaknesses:
         cve = (f'<a href="https://nvd.nist.gov/vuln/detail/{html.escape(w.cve)}" '
                f'target="_blank" rel="noopener">{html.escape(w.cve)}</a>') if w.cve else "—"
+        rem = (f'<div class="fix"><b>Recommendation:</b> {html.escape(w.remediation)}</div>'
+               if w.remediation else "")
         wrows.append(
             f'<tr><td><span class="sev sev--{w.severity}">{w.severity}</span></td>'
             f'<td class="mono">{html.escape(w.host)}:{w.port}</td>'
-            f'<td>{html.escape(w.title)}<div class="note">{html.escape(w.note)}</div></td>'
+            f'<td>{html.escape(w.title)}<div class="note">{html.escape(w.note)}</div>{rem}</td>'
             f'<td class="mono">{cve}</td></tr>')
     wtable = "\n".join(wrows)
     wsummary = " · ".join(f"{wcounts[s]} {s}" for s in
@@ -301,6 +306,9 @@ def build_html(workdir: str) -> str:
   .sev--low{{background:#eff8ff;color:var(--low);border:1px solid #b2ddff}}
   .sev--info{{background:#f2f4f7;color:var(--info);border:1px solid #e4e7ec}}
   .note{{color:var(--muted);font-size:12px;margin-top:3px}}
+  .fix{{color:var(--ink);font-size:12.5px;margin-top:6px;background:var(--soft);
+    border:1px solid var(--line);border-radius:3px;padding:6px 9px}}
+  .fix b{{color:var(--accent)}}
   .foot{{color:var(--muted);font-size:11.5px;margin-top:34px;border-top:1px solid var(--line);
     padding-top:16px}}
   @media print{{body{{background:#fff}}.doc{{box-shadow:none;border:none;margin:0;

@@ -660,6 +660,7 @@ tests/test_safety.py   control tests
 - [x] Attack phase scans every discovered web port (80/443/8080/Tomcat 8180…), not just port 80
 - [x] Web path discovery: attack phase probes common app/admin paths (/dvwa, /phpMyAdmin, /manager/html…), not just the web root
 - [x] Client-ready HTML report: executive summary with risk rating + severity rollup, a Vulnerabilities section (confirmed/needs-review + evidence), recon inventory, CVE leads, provenance graph, audit badge
+- [x] Per-finding remediation guidance (defensive recommendations) on every vulnerability and CVE lead in the report
 - [x] Validator: confirm each detection from its own evidence before it counts (non-destructive; injection-tainted evidence never auto-confirms)
 - [x] Continuous watch mode: report only what changed each pass; sim injector measures time-to-detection
 - [ ] Live *followed* numbers from an instruct model that plans (the uncensored chat tunes tested declared recon done regardless)

@@ -34,6 +34,7 @@ class Weakness:
     cve: str               # "CVE-…" when there is one, else ""
     evidence: str          # the banner/version that triggered the match
     note: str              # one-line advisory (what to check, never how to exploit)
+    remediation: str = ""  # recommended fix, for the report's remediation column
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,83 @@ _SIGNATURES: List[_Sig] = [
 ]
 
 
+# Recommended fix per weakness title — defensive guidance only (what to do,
+# never how to exploit). Keyed by the signature's title so one entry covers all
+# ports that share it (e.g. the three r-services rows).
+_REMEDIATION = {
+    "vsftpd 2.3.4 backdoor":
+        "Remove the compromised package and reinstall a current vsftpd from a "
+        "trusted repository; treat the host as breached and rotate credentials.",
+    "Samba 'username map script' command injection":
+        "Upgrade Samba to a supported release and remove any `username map "
+        "script` directive from smb.conf.",
+    "UnrealIRCd backdoor":
+        "Rebuild from a verified UnrealIRCd source on a current release and "
+        "treat the host as compromised.",
+    "distccd remote command execution":
+        "Disable distccd or bind it to localhost; never expose the distcc "
+        "daemon to untrusted networks.",
+    "Metasploitable bind shell":
+        "Unauthenticated root shell — rebuild the host; it must not run in any "
+        "real environment.",
+    "OpenSSH username enumeration":
+        "Upgrade OpenSSH to 7.7 or later.",
+    "MySQL authentication bypass (affected builds)":
+        "Upgrade MySQL/MariaDB to a patched build and restrict the service to "
+        "trusted hosts only.",
+    "Outdated Apache httpd":
+        "Upgrade to a supported Apache httpd release and apply current patches.",
+    "Outdated ISC BIND":
+        "Upgrade BIND to a supported version and review recursion/exposure.",
+    "Cleartext Telnet exposed":
+        "Disable Telnet; use SSH for remote administration.",
+    "r-services exposed (rexec/rlogin/rsh)":
+        "Disable the r-services (rexec/rlogin/rsh) and use SSH instead.",
+    "VNC exposed":
+        "Restrict VNC to a management network or VPN, require strong auth, or "
+        "tunnel it over SSH.",
+    "Open X11 server":
+        "Disable remote X11 access or require xauth; never run `xhost +`.",
+    "NFS export reachable":
+        "Restrict exports to specific hosts, disable world-readable shares, and "
+        "firewall the service.",
+    "rpcbind reachable":
+        "Firewall rpcbind/portmapper from untrusted networks and disable unused "
+        "RPC services.",
+    "Apache Tomcat manager exposed":
+        "Remove or restrict the Tomcat manager app and change default "
+        "credentials.",
+}
+
+
+def remediation_for_vuln(template: str, severity: str = "") -> str:
+    """Recommended fix for a nuclei vuln finding, by template family."""
+    t = (template or "").lower()
+    table = [
+        (("1823", "cgi"), "Stop running PHP via CGI or upgrade PHP to a patched "
+                          "release; php-cgi query-string injection allows RCE."),
+        (("env",), "Remove the exposed file from the web root and rotate any "
+                   "secrets it contained."),
+        (("git",), "Block access to the .git directory and remove it from the "
+                   "web root."),
+        (("phpinfo",), "Remove phpinfo() pages from production."),
+        (("dir", "listing"), "Disable directory listing (e.g. Options -Indexes)."),
+        (("swagger", "openapi", "api"), "Restrict access to API documentation in "
+                                        "production."),
+        (("sql", "backup", "dump"), "Remove database dumps/backups from the web "
+                                    "root and rotate exposed credentials."),
+        (("shellshock",), "Patch Bash (CVE-2014-6271) and disable CGI scripts "
+                          "that invoke the shell."),
+    ]
+    for keys, fix in table:
+        if any(k in t for k in keys):
+            return fix
+    if severity.lower() in ("critical", "high"):
+        return ("Verify the finding and patch or remove the affected component "
+                "as a priority.")
+    return "Review and remediate the affected component as appropriate."
+
+
 def analyze(findings: List[Finding]) -> List[Weakness]:
     """Map service findings to known weaknesses, most severe first."""
     out: List[Weakness] = []
@@ -144,7 +222,8 @@ def analyze(findings: List[Finding]) -> List[Weakness]:
                 out.append(Weakness(
                     host=host, port=port, service=name or sig.name_re or "?",
                     severity=sig.severity, title=sig.title, cve=sig.cve,
-                    evidence=(ver or f.summary), note=sig.note))
+                    evidence=(ver or f.summary), note=sig.note,
+                    remediation=_REMEDIATION.get(sig.title, "")))
     return sorted(out, key=lambda w: (_SEV_ORDER.get(w.severity, 9), w.host, w.port))
 
 

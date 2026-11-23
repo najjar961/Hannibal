@@ -1237,5 +1237,39 @@ class TestWebPathDiscovery(unittest.TestCase):
         self.assertFalse(g.check([], args, binary="nuclei").allowed)
 
 
+class TestRemediation(unittest.TestCase):
+    """Each finding carries a defensive recommendation."""
+
+    def test_weakness_carries_remediation(self):
+        from hannibal.analysis import analyze
+        from hannibal.types import Finding
+        f = [Finding("service", "h:23", "telnet",
+                     {"port": 23, "service": "telnet", "version": "Linux telnetd"},
+                     parent_target="h")]
+        w = analyze(f)
+        self.assertTrue(w)
+        self.assertIn("SSH", w[0].remediation)
+
+    def test_vuln_remediation_by_family(self):
+        from hannibal.analysis import remediation_for_vuln
+        self.assertIn("PHP", remediation_for_vuln("CVE-2012-1823", "high"))
+        self.assertIn(".git", remediation_for_vuln("git-config", "medium"))
+        # unknown template still gets severity-appropriate advice, never empty
+        self.assertTrue(remediation_for_vuln("x", "critical"))
+        self.assertTrue(remediation_for_vuln("x", "low"))
+
+    def test_report_shows_recommendations(self):
+        import tempfile
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        from hannibal.htmlreport import build_html
+        with tempfile.TemporaryDirectory() as d:
+            Orchestrator(RunConfig(objective="map and attack", backend="mock",
+                                   quiet=True, workdir=d, max_auto_tier=2,
+                                   scope=["10.10.10.0/24"])).run()
+            page = build_html(d)
+            self.assertIn("Recommendation", page)
+
+
 if __name__ == "__main__":
     unittest.main()
