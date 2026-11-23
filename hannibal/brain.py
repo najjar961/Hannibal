@@ -157,6 +157,36 @@ def _web_urls(findings: List[Finding], host: str) -> List[str]:
     return urls
 
 
+# high-value paths a quick web sweep should always check — vulnerable practice
+# apps, admin panels, and commonly-exposed files. Hannibal appends these to each
+# web base so the attack phase reaches the apps, not just the server root.
+_COMMON_WEB_PATHS = [
+    "/", "/dvwa/", "/mutillidae/", "/phpMyAdmin/", "/phpmyadmin/",
+    "/tikiwiki/", "/twiki/", "/test/", "/info.php", "/phpinfo.php",
+    "/.git/config", "/.env", "/server-status", "/manager/html", "/admin/",
+]
+
+
+def _attack_urls(findings: List[Finding], host: str, max_urls: int = 60) -> List[str]:
+    """Web bases on `host` expanded with common app/admin paths (capped).
+
+    This is the lightweight path-discovery step: instead of scanning only the
+    web root, the attack phase probes well-known app locations too, so a
+    vulnerable app one directory deep isn't missed. Non-existent paths just 404.
+    """
+    out: List[str] = []
+    seen = set()
+    for base in _web_urls(findings, host):
+        for path in _COMMON_WEB_PATHS:
+            u = base.rstrip("/") + path
+            if u not in seen:
+                seen.add(u)
+                out.append(u)
+            if len(out) >= max_urls:
+                return out
+    return out
+
+
 def _host_from_goal(goal: str, findings: List[Finding], scope: List[str]) -> str:
     m = re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", goal)
     return m.group(0) if m else _primary_host(findings, scope)
@@ -167,7 +197,7 @@ def rule_decompose(goal: str, findings: List[Finding],
     g = goal.lower()
     if "vuln" in g or "attack" in g:
         host = _host_from_goal(goal, findings, scope)
-        urls = _web_urls(findings, host)
+        urls = _attack_urls(findings, host)
         args: List[str] = []
         for u in urls:
             args += ["-u", u]
@@ -177,7 +207,7 @@ def rule_decompose(goal: str, findings: List[Finding],
         # app-server ports like Tomcat 8180, …) so the scan doesn't miss a web
         # service just because it isn't on port 80
         return [CommandSpec("nuclei", args, urls,
-                            f"scan {len(urls)} web endpoint(s) on {host}")]
+                            f"scan {len(urls)} web path(s) on {host}")]
     if "discovery" in g or "sweep" in g:
         targets = list(scope) or ["target"]
         return [CommandSpec("nmap", ["-sn", *targets], targets,

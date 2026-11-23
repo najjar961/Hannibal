@@ -1138,8 +1138,10 @@ class TestWebPortTargeting(unittest.TestCase):
         specs = rule_decompose("vulnerability scan on 10.0.0.1", f, ["10.0.0.1"])
         self.assertEqual(len(specs), 1)
         self.assertEqual(specs[0].binary, "nuclei")
-        self.assertEqual(specs[0].args.count("-u"), 2)
-        self.assertIn("http://10.0.0.1:8080", specs[0].targets)
+        # one nuclei run covering both web bases, each expanded with app paths
+        self.assertGreaterEqual(specs[0].args.count("-u"), 2)
+        self.assertIn("http://10.0.0.1/", specs[0].targets)
+        self.assertIn("http://10.0.0.1:8080/", specs[0].targets)
 
     def test_multi_url_nuclei_passes_scope(self):
         # every -u target is scope-checked; all in scope -> allowed
@@ -1187,6 +1189,34 @@ class TestRceValidation(unittest.TestCase):
         from hannibal.validator import validate_finding
         ok, _ = validate_finding(self._rce([]))
         self.assertFalse(ok)
+
+
+class TestWebPathDiscovery(unittest.TestCase):
+    """The attack phase probes common app paths, not just the web root."""
+
+    def _svc(self, host, port, svc, ver=""):
+        return Finding("service", f"{host}:{port}", svc,
+                       {"port": port, "service": svc, "version": ver},
+                       parent_target=host)
+
+    def test_expands_bases_with_app_paths(self):
+        from hannibal.brain import _attack_urls
+        urls = _attack_urls([self._svc("h", 80, "http")], "h")
+        self.assertIn("h/dvwa/", " ".join(urls))          # reaches a vulnerable app
+        self.assertIn("http://h/", urls)                  # still scans the root
+        self.assertTrue(all(u.startswith("http://h") for u in urls))  # stays on host
+
+    def test_capped(self):
+        from hannibal.brain import _attack_urls
+        f = [self._svc("h", p, "http") for p in (80, 443, 8080, 8180, 8000)]
+        urls = _attack_urls(f, "h", max_urls=20)
+        self.assertLessEqual(len(urls), 20)
+
+    def test_scope_guard_still_blocks_offhost_paths(self):
+        from hannibal.scope import ScopeGuard
+        g = ScopeGuard(["10.0.0.1"])
+        args = ["-u", "http://10.0.0.1/dvwa/", "-u", "http://evil.com/dvwa/"]
+        self.assertFalse(g.check([], args, binary="nuclei").allowed)
 
 
 if __name__ == "__main__":
