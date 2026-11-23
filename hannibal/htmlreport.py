@@ -17,7 +17,7 @@ from .audit import AuditLog
 from .types import Finding
 from .analysis import remediation_for_vuln
 
-_KIND_ORDER = {"vuln": -1, "host": 0, "port": 1, "service": 2, "web": 3, "note": 4}
+_KIND_ORDER = {"idor": -2, "vuln": -1, "host": 0, "port": 1, "service": 2, "web": 3, "note": 4}
 
 
 def _run_meta(workdir: str) -> Dict:
@@ -122,7 +122,7 @@ def build_html(workdir: str) -> str:
 
     suspicious_n = sum(1 for f in findings if f.suspicious)
     mermaid = to_mermaid(findings)
-    vulns = [f for f in findings if f.kind == "vuln"]
+    vulns = [f for f in findings if f.kind in ("vuln", "idor")]
     endpoints = [f for f in findings if f.kind == "endpoint"]
     ep_param = sum(1 for f in endpoints if (f.data or {}).get("parameterized"))
 
@@ -181,7 +181,7 @@ def build_html(workdir: str) -> str:
 
     # recon inventory table (vulns get their own section above)
     rows = []
-    for f in sorted([x for x in findings if x.kind != "vuln"],
+    for f in sorted([x for x in findings if x.kind not in ("vuln", "idor")],
                     key=lambda x: (_KIND_ORDER.get(x.kind, 9), x.target)):
         flag = '<span class="badge badge--bad">⚠ quarantined</span>' if f.suspicious else ""
         rows.append(

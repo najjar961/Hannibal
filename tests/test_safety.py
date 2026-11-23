@@ -1332,5 +1332,83 @@ class TestWebCrawl(unittest.TestCase):
                                  binary="katana").allowed)
 
 
+class TestAccessControl(unittest.TestCase):
+    """IDOR / access-control test: detection-only, tier-gated, scope-bound."""
+
+    def test_sibling_generation(self):
+        from hannibal.authz import _sibling
+        self.assertEqual(_sibling("http://h/x?id=1"), "http://h/x?id=2")
+        self.assertEqual(_sibling("http://h/users/42"), "http://h/users/43")
+        self.assertIsNone(_sibling("http://h/about"))   # no id -> nothing to test
+
+    def test_endpoint_detects_distinct_objects(self):
+        from hannibal.authz import test_endpoint, Resp
+        # vulnerable: each id returns a different object
+        fetch_vuln = lambda u: Resp(True, u)
+        self.assertIsNotNone(test_endpoint("http://h/x?id=1", fetch_vuln))
+        # safe: same response regardless of id
+        fetch_safe = lambda u: Resp(True, "same")
+        self.assertIsNone(test_endpoint("http://h/x?id=1", fetch_safe))
+        # sibling not reachable -> not an IDOR
+        fetch_404 = lambda u: Resp(u.endswith("id=1"), u)
+        self.assertIsNone(test_endpoint("http://h/x?id=1", fetch_404))
+
+    def test_check_dedups_same_endpoint(self):
+        from hannibal.authz import check_access_control, Resp
+        fetch = lambda u: Resp(True, u)
+        urls = ["http://h/x?id=1", "http://h/x?id=2", "http://h/x?id=9"]
+        found = check_access_control(urls, fetch)
+        self.assertEqual(len(found), 1)                 # one endpoint, tested once
+        self.assertEqual(found[0].kind, "idor")
+        self.assertTrue(found[0].data["validated"])
+
+    def test_sim_fetch_models_lab(self):
+        from hannibal.authz import sim_fetch
+        # 10.10.10.5 /profile.php is IDOR-vulnerable in the lab
+        a = sim_fetch("http://10.10.10.5/profile.php?id=1")
+        b = sim_fetch("http://10.10.10.5/profile.php?id=2")
+        self.assertTrue(a.ok and b.ok and a.fp != b.fp)
+
+    def test_scoped_fetch_never_requests_out_of_scope(self):
+        # out-of-scope URL returns not-ok WITHOUT any network call
+        from hannibal.authz import make_scoped_fetch
+        from hannibal.scope import ScopeGuard
+        fetch = make_scoped_fetch(ScopeGuard(["10.0.0.1"]))
+        self.assertFalse(fetch("http://8.8.8.8/x?id=1").ok)
+
+    def test_lab_run_finds_idor_when_authorized(self):
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        from hannibal.store import Store
+        with tempfile.TemporaryDirectory() as d:
+            cfg = RunConfig(objective="map and attack", backend="mock", quiet=True,
+                            workdir=d, max_auto_tier=2,
+                            scope=["10.10.10.0/24", "10.10.11.0/24"])
+            Orchestrator(cfg).run()
+            s = Store(cfg.db_path)
+            idor = [f for f in s.all_findings() if f.kind == "idor"]
+            vulns = [f for f in s.all_findings() if f.kind == "vuln"]
+            s.close()
+            self.assertEqual(len(idor), 2)              # the two vulnerable endpoints
+            self.assertTrue(all(f.data["severity"] == "high" for f in idor))
+            self.assertEqual(len(vulns), 5)             # planted-vuln count unaffected
+
+    def test_idor_held_without_attack_tier(self):
+        import json
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        from hannibal.store import Store
+        with tempfile.TemporaryDirectory() as d:
+            cfg = RunConfig(objective="map", backend="mock", quiet=True, workdir=d,
+                            scope=["10.10.10.0/24"])   # default tier 1
+            Orchestrator(cfg).run()
+            s = Store(cfg.db_path)
+            self.assertFalse([f for f in s.all_findings() if f.kind == "idor"])
+            s.close()
+            events = [json.loads(l)["event"] for l in
+                      open(os.path.join(d, "audit.log"), encoding="utf-8") if l.strip()]
+            self.assertIn("access_control_held", events)
+
+
 if __name__ == "__main__":
     unittest.main()

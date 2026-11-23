@@ -29,6 +29,9 @@ class BoxProfile:
     # URL paths a crawl would discover on this box (some parameterized — the
     # candidates a future access-control/IDOR test would probe)
     endpoints: List[str] = field(default_factory=list)
+    # endpoint path prefixes whose object references are NOT access-controlled
+    # (ground truth for the IDOR / access-control test)
+    idor: List[str] = field(default_factory=list)
 
     def web_endpoint_port(self) -> Optional[int]:
         for p in (80, 443, 8080, 8443):
@@ -54,7 +57,8 @@ LAB: Dict[str, BoxProfile] = {
             {"id": "phpinfo-files", "name": "phpinfo() page exposed",
              "severity": "low", "path": "/info.php", "evidence": ["PHP Version 7.4.3"]},
         ],
-        endpoints=["/", "/index.php", "/profile.php?id=1", "/admin/", "/.git/config"]),
+        endpoints=["/", "/index.php", "/profile.php?id=1", "/admin/", "/.git/config"],
+        idor=["/profile.php"]),
     "10.10.11.20": BoxProfile(
         "10.10.11.20", {22: "ssh", 80: "http", 3306: "mysql"},
         {22: "OpenSSH 9.0", 80: "nginx 1.18.0", 3306: "MySQL 8.0.32"},
@@ -65,7 +69,8 @@ LAB: Dict[str, BoxProfile] = {
              "severity": "high", "path": "/.env",
              "evidence": ["DB_PASSWORD=<redacted in lab>"]},
         ],
-        endpoints=["/", "/login", "/api/users/1", "/dashboard"]),
+        endpoints=["/", "/login", "/api/users/1", "/dashboard"],
+        idor=["/api/users"]),
     "10.10.11.33": BoxProfile(
         "10.10.11.33", {21: "ftp", 80: "http", 443: "https", 8080: "http-proxy"},
         {21: "vsftpd 3.0.3", 80: "Apache httpd 2.4.52",
@@ -129,6 +134,7 @@ def load_boxes(path: str) -> Dict[str, BoxProfile]:
             web_tech=b.get("web_tech", "") or "Apache,PHP",
             injection=bool(b.get("injection", False)),
             endpoints=list(b.get("endpoints", [])),
+            idor=list(b.get("idor", [])),
             vulns=list(b.get("vulns", [])),
         )
     if not boxes:

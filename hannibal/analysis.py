@@ -189,6 +189,9 @@ def remediation_for_vuln(template: str, severity: str = "") -> str:
                                     "root and rotate exposed credentials."),
         (("shellshock",), "Patch Bash (CVE-2014-6271) and disable CGI scripts "
                           "that invoke the shell."),
+        (("idor", "access-control", "bola"),
+         "Enforce object-level authorization: confirm the authenticated session "
+         "owns the requested object before returning it."),
     ]
     for keys, fix in table:
         if any(k in t for k in keys):

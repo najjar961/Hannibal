@@ -288,6 +288,30 @@ class Orchestrator:
     def _finish(self) -> None:
         state = self.budget.state()
 
+        # access-control (IDOR) test — attack tier. Over the parameterized
+        # endpoints the crawl discovered, check whether a sibling object
+        # reference is reachable (detection only, scope-bound, body discarded).
+        # Gated exactly like the other attack-tier work: held unless authorized.
+        from .authz import check_access_control, sim_fetch, make_scoped_fetch
+        param_eps = [str((f.data or {}).get("url")) for f in self.store.all_findings()
+                     if f.kind == "endpoint" and (f.data or {}).get("parameterized")
+                     and (f.data or {}).get("url")]
+        if param_eps:
+            if self.cfg.max_auto_tier >= cmd.TIER_ATTACK:
+                fetch = make_scoped_fetch(self.scope) if self.cfg.execute else sim_fetch
+                idor = check_access_control(param_eps, fetch)
+                for f in idor:
+                    self.store.add_finding(f)
+                self.audit.record("access_control_test",
+                                  tested=len(param_eps), findings=len(idor))
+                if idor:
+                    self._log(f"\naccess-control test: {len(idor)} IDOR issue(s) "
+                              f"on {len(param_eps)} parameterized endpoint(s)")
+            else:
+                self.audit.record("access_control_held", tested=len(param_eps))
+                self._log(f"\naccess-control test held — {len(param_eps)} "
+                          f"parameterized endpoint(s), attack tier not authorized")
+
         # validate detections before reporting: corroborate each vuln from the
         # evidence it already produced (non-destructive — no new traffic, no
         # exploitation). A confirmed finding is one an operator can trust; the
