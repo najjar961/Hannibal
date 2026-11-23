@@ -66,6 +66,38 @@ def cmd_run(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_watch(a: argparse.Namespace) -> int:
+    from .watch import run_watch, demo_injector, detection_table
+    cfg = RunConfig(
+        objective="continuously map and attack the scope", scope=_split(a.scope),
+        backend=a.backend, model=a.model, base_url=a.base_url,
+        api_key=a.api_key or "", workers=a.workers, execute=a.execute,
+        workdir=a.workdir, max_auto_tier=a.max_auto_tier, approval=a.approve,
+    )
+    if not cfg.scope:
+        print("error: --scope is required (the authorized targets)", file=sys.stderr)
+        return 2
+    injector = demo_injector() if a.demo else None
+    if a.demo and a.execute:
+        print("error: --demo mutates the simulated lab; it cannot be used with "
+              "--execute", file=sys.stderr)
+        return 2
+    if a.execute:
+        print("⚠  EXECUTE mode: real tools will run against the scope above, "
+              "every cycle.")
+        print("   Only proceed on systems you own or are authorized to test.\n")
+    forever = a.cycles <= 0
+    print(f"⟳  watch: {'until interrupted' if forever else f'{a.cycles} cycle(s)'}"
+          f", interval {a.interval}s\n")
+    try:
+        run_watch(cfg, a.cycles, injector=injector, interval=a.interval)
+    except KeyboardInterrupt:
+        print("\nstopped.")
+    if injector:
+        print("\ntime to detection\n" + detection_table(injector))
+    return 0
+
+
 def cmd_verify(a: argparse.Namespace) -> int:
     import os
     path = a.path if a.path.endswith(".log") else os.path.join(a.path, "audit.log")
@@ -165,6 +197,30 @@ def build_parser() -> argparse.ArgumentParser:
                         "(default), 'prompt' asks you y/N for each one")
     r.add_argument("--workdir", default="hannibal_run")
     r.set_defaults(func=cmd_run)
+
+    w = sub.add_parser("watch", help="monitor a scope continuously, report what changed")
+    w.add_argument("-s", "--scope", required=True,
+                   help="comma-separated authorized IPs/CIDRs/hosts")
+    w.add_argument("--cycles", type=int, default=0,
+                   help="number of passes (0 = until interrupted)")
+    w.add_argument("--interval", type=float, default=0.0,
+                   help="seconds to wait between passes")
+    w.add_argument("--demo", action="store_true",
+                   help="simulated lab only: inject changes on a schedule and "
+                        "print a time-to-detection table")
+    w.add_argument("--backend", default="mock", choices=["mock", "ollama", "openai"])
+    w.add_argument("--model", default="qwen3:8b")
+    w.add_argument("--base-url", default="http://localhost:11434/v1")
+    w.add_argument("--api-key", default="")
+    w.add_argument("--workers", type=int, default=4)
+    w.add_argument("--execute", action="store_true",
+                   help="actually run the tools (default: deterministic dry-run)")
+    w.add_argument("--max-auto-tier", type=int, default=1, choices=[1, 2],
+                   help="1 = recon only (default), 2 = attack wraiths too "
+                        "(only for your own isolated lab)")
+    w.add_argument("--approve", default="deny", choices=["deny", "prompt"])
+    w.add_argument("--workdir", default="hannibal_watch")
+    w.set_defaults(func=cmd_watch)
 
     v = sub.add_parser("verify-audit", help="verify the audit hash-chain")
     v.add_argument("path", help="run directory or path to audit.log")

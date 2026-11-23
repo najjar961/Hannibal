@@ -942,5 +942,73 @@ class TestValidator(unittest.TestCase):
             self.assertTrue(all("validation" in f.data for f in vulns))
 
 
+class TestWatchMode(unittest.TestCase):
+    """Continuous monitoring: detect what changed, and time the detection."""
+
+    def setUp(self):
+        import copy
+        from hannibal import lab as _lab
+        self._lab = _lab
+        self._snapshot = copy.deepcopy(_lab.LAB)
+
+    def tearDown(self):
+        self._lab.LAB.clear()
+        self._lab.LAB.update(self._snapshot)
+
+    def _cfg(self, d):
+        from hannibal.config import RunConfig
+        return RunConfig(objective="watch", backend="mock", quiet=True, workdir=d,
+                         max_auto_tier=2, scope=["10.10.10.0/24", "10.10.11.0/24"])
+
+    def test_injector_applies_once_at_its_cycle(self):
+        from hannibal.watch import VulnInjector, InjectionEvent
+        ev = InjectionEvent(cycle=2, kind="vuln", box_ip="10.10.11.20",
+                            payload={"id": "x", "name": "X", "severity": "low",
+                                     "evidence": ["y"]})
+        inj = VulnInjector([ev])
+        self.assertEqual(inj.apply_due(1, 1.0), [])      # not yet
+        self.assertEqual(len(inj.apply_due(2, 2.0)), 1)  # now
+        self.assertEqual(inj.apply_due(2, 2.0), [])      # not twice
+        self.assertEqual(ev.injected_at, 2.0)
+
+    def test_detects_and_validates_injected_vuln(self):
+        from hannibal.watch import run_watch, demo_injector
+        clock = [0.0]
+        def now():
+            clock[0] += 1.0
+            return clock[0]
+        inj = demo_injector()
+        with tempfile.TemporaryDirectory() as d:
+            results = run_watch(self._cfg(d), cycles=4, injector=inj,
+                                now=now, sleep=lambda _: None, log=lambda *_: None)
+        self.assertEqual(len(results), 4)
+        vuln_ev = next(e for e in inj.events if e.kind == "vuln")
+        host_ev = next(e for e in inj.events if e.kind == "host")
+        # the SQL-backup vuln is caught the cycle it is injected, and validated
+        self.assertEqual(vuln_ev.detected_cycle, 2)
+        self.assertEqual(vuln_ev.validated_cycle, 2)
+        self.assertGreater(vuln_ev.detected_at, vuln_ev.injected_at)
+        # the brand-new host is caught the cycle it appears
+        self.assertEqual(host_ev.detected_cycle, 3)
+
+    def test_new_findings_only_counted_once(self):
+        from hannibal.watch import run_watch
+        with tempfile.TemporaryDirectory() as d:
+            results = run_watch(self._cfg(d), cycles=2,
+                                log=lambda *_: None)
+        # with nothing injected, cycle 2 re-scans the same lab -> no new findings
+        self.assertGreater(results[0].new_findings, 0)
+        self.assertEqual(results[1].new_findings, 0)
+
+    def test_detection_table_renders(self):
+        from hannibal.watch import run_watch, demo_injector, detection_table
+        inj = demo_injector()
+        with tempfile.TemporaryDirectory() as d:
+            run_watch(self._cfg(d), cycles=4, injector=inj, log=lambda *_: None)
+        table = detection_table(inj)
+        self.assertIn("exposed-sql-backup", table)
+        self.assertIn("10.10.11.50", table)
+
+
 if __name__ == "__main__":
     unittest.main()

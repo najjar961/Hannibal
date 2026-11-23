@@ -203,6 +203,40 @@ deliberately out of scope — a real exploit attempt is a human decision.
 
 ---
 
+## Continuous watch mode
+
+A one-shot campaign maps a target once; real attack surface drifts. `watch`
+runs the campaign on a loop and reports only what **changed** since the last
+pass — a new host, a new open port, a newly shipped misconfig. On a real lab
+(`--execute`) this is the whole feature: it catches changes *you* make.
+
+```bash
+# monitor your lab forever, re-checking every 5 minutes, recon-tier only
+hannibal watch -s 10.10.10.0/24 --execute --interval 300
+
+# simulated demo: inject changes on a schedule and measure time-to-detection
+hannibal watch -s 10.10.10.0/24,10.10.11.0/24 --demo --cycles 4 --max-auto-tier 2
+```
+
+The `--demo` run mutates the simulated lab mid-flight — a SQL backup appears in
+a web root, then a whole new staging host comes up — and prints how long each
+took to catch:
+
+```
+time to detection
+change                          inj→det  inj→validated   latency
+────────────────────────────────────────────────────────────────────────
+10.10.11.20 [exposed-sql-backup]  cycle 2  cycle 2         0.12s / 0 cycle(s)
+new host 10.10.11.50            cycle 3  —               0.15s / 0 cycle(s)
+```
+
+That is the "attacks nonstop" claim turned into a measured number: a weakness
+appears, and Hannibal finds — and confirms — it within the same monitoring
+cycle. The injector is a sim/demo device only; it never runs against, or sends
+anything to, a real system.
+
+---
+
 ## Safety model in one paragraph
 
 Hannibal will not run a command whose binary is not on the allowlist, will not run a command that touches a target outside the scope you pass on the command line, will not run an attack-tier command without clearance (`--max-auto-tier` / `--approve`), will not follow instructions found in tool output, and will not exceed the budgets you set. The default mode never spawns a real process at all. `--execute` is opt-in and prints a warning. None of these are suggestions to the model — they are enforced in code on the execution path, and every decision is written to an audit log you can verify.
@@ -514,6 +548,7 @@ hannibal/
   budget.py            kill-switch / budgets
   store.py             SQLite queue + findings graph (Mermaid export)
   htmlreport.py        self-contained HTML scan report
+  watch.py             continuous monitor loop + simulated-lab vuln injector
   validator.py         corroborate detections from their evidence (non-destructive)
   parse.py             simulator output → structured findings
   realparse.py         real nmap -oX XML / httpx -json / nuclei -jsonl → findings
@@ -547,7 +582,7 @@ tests/test_safety.py   control tests
 - [x] Rules of engagement: risk tiers + approval gate (hold / prompt / lab auto-clear)
 - [x] First attack-tier Wraith: `nuclei` vulnerability scan, scored against planted lab weaknesses
 - [x] Validator: confirm each detection from its own evidence before it counts (non-destructive; injection-tainted evidence never auto-confirms)
-- [ ] Continuous watch mode: re-attack only what changed, measure time-to-detection
+- [x] Continuous watch mode: report only what changed each pass; sim injector measures time-to-detection
 - [ ] Live *followed* numbers from an instruct model that plans (the uncensored chat tunes tested declared recon done regardless)
 - [ ] Run wraiths unprivileged in a container with egress limited to scope
 

@@ -67,6 +67,11 @@ def _corroborates(template: str, evidence: str) -> Tuple[bool, str]:
         if has("swagger", "openapi", '"paths"', "api"):
             return True, "API / Swagger documentation markers present"
         return False, "no API-doc markers in the response"
+    if "sql" in t or "backup" in t or "dump" in t:
+        if has("insert into", "create table", "mysql dump", "-- dump",
+               "sqlite format"):
+            return True, "response body is a database dump"
+        return False, "no database-dump markers in the response"
     if "ssl" in t or "tls" in t or "cert" in t:
         return False, "certificate findings need manual review"
     return False, "no corroboration rule for this detection type — manual review"
