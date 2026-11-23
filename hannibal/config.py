@@ -18,7 +18,7 @@ class RunConfig:
     workers: int = 4
 
     # budget / kill-switch
-    max_rounds: int = 6
+    max_rounds: int = 8
     max_seconds: int = 600
     max_tokens: int = 200_000
     max_commands: int = 200
@@ -40,6 +40,14 @@ class RunConfig:
 
     # safety
     require_scope: bool = True            # refuse to start with an empty scope
+    # rules of engagement: highest risk tier that runs without a human.
+    # 1 = recon only (default). 2 = attack-tier wraiths run on their own —
+    # only for your own isolated lab.
+    max_auto_tier: int = 1
+    # what happens to a command above max_auto_tier:
+    #   "deny"   — held: logged, recorded in the report, never run (default)
+    #   "prompt" — the operator is asked y/N on the console for each one
+    approval: str = "deny"
 
     # output
     quiet: bool = False                   # suppress per-step console logging
@@ -48,4 +56,5 @@ class RunConfig:
     def summary(self) -> str:
         mode = "EXECUTE" if self.execute else "DRY-RUN"
         return (f"objective={self.objective!r} scope={self.scope} "
-                f"backend={self.backend} mode={mode} workers={self.workers}")
+                f"backend={self.backend} mode={mode} workers={self.workers} "
+                f"auto-tier≤{self.max_auto_tier} approval={self.approval}")

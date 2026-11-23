@@ -16,7 +16,7 @@ from .store import Store, to_mermaid
 from .audit import AuditLog
 from .types import Finding
 
-_KIND_ORDER = {"host": 0, "port": 1, "service": 2, "web": 3, "note": 4}
+_KIND_ORDER = {"vuln": -1, "host": 0, "port": 1, "service": 2, "web": 3, "note": 4}
 
 
 def _run_meta(workdir: str) -> Dict:
@@ -168,6 +168,7 @@ def build_html(workdir: str) -> str:
   .kind{{font-family:ui-monospace,monospace;font-size:12px;padding:1px 7px;
     border-radius:5px;background:#1b2330;color:var(--teal)}}
   .kind--web{{color:#d29922}} .kind--service{{color:#a371f7}}
+  .kind--vuln{{color:#ff6b6b;background:#3d0f12}}
   .graph{{background:var(--panel);border:1px solid var(--line);border-radius:10px;
     padding:18px;overflow:auto}}
   .sev{{font-family:ui-monospace,monospace;font-size:11px;padding:2px 8px;

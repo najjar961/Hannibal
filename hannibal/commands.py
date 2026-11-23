@@ -48,11 +48,22 @@ class ArgGrammar:
     at_target: bool = False                                     # dig @server is a target
 
 
+# Risk tiers — the rules of engagement. The orchestrator runs a command on its
+# own only if its tier is <= RunConfig.max_auto_tier; anything higher is held
+# for a human (or refused) before it can touch a target.
+#   1 = recon: observes the target (port scans, fingerprinting, DNS)
+#   2 = attack: sends probes designed to trigger a vulnerability
+TIER_RECON = 1
+TIER_ATTACK = 2
+TIER_NAMES = {TIER_RECON: "recon", TIER_ATTACK: "attack"}
+
+
 @dataclass
 class AllowedCommand:
     binary: str
     description: str
     grammar: ArgGrammar
+    tier: int = TIER_RECON
 
 
 def _int_between(lo: int, hi: int) -> Validator:
@@ -109,6 +120,30 @@ def _stdout_only(val: str) -> Optional[str]:
 
 _DNS_TYPES = ("a", "aaaa", "mx", "ns", "txt", "soa", "cname", "ptr", "srv", "any", "axfr")
 
+# nuclei template tags a wraith may select. Detection-only families; the
+# destructive / noisy ones (dos, fuzz, intrusive, brute-force, default-login)
+# are not on the list, and the runner also excludes them explicitly.
+_SAFE_NUCLEI_TAGS = {"exposure", "misconfig", "cve", "panel", "config", "tech",
+                     "files", "disclosure", "takeover", "ssl"}
+_NUCLEI_SEVERITIES = {"info", "low", "medium", "high", "critical"}
+# always appended to a real nuclei run (see _with_structured_output)
+NUCLEI_FORCED_FLAGS = ["-jsonl", "-silent", "-nc", "-duc", "-ni"]
+NUCLEI_EXCLUDED_TAGS = "dos,fuzz,intrusive,brute-force,default-login"
+
+
+def _nuclei_tags(val: str) -> Optional[str]:
+    for t in val.split(","):
+        if t.strip().lower() not in _SAFE_NUCLEI_TAGS:
+            return f"nuclei tag {t!r} not on the safe-tag allowlist"
+    return None
+
+
+def _nuclei_severity(val: str) -> Optional[str]:
+    for s in val.split(","):
+        if s.strip().lower() not in _NUCLEI_SEVERITIES:
+            return f"nuclei severity {s!r} not recognised"
+    return None
+
 # The recon-only allowlist. Deliberately conservative; extend intentionally.
 REGISTRY: Dict[str, AllowedCommand] = {
     "nmap": AllowedCommand(
@@ -140,7 +175,29 @@ REGISTRY: Dict[str, AllowedCommand] = {
                    keywords=set(_DNS_TYPES), at_target=True),
     ),
     "whois": AllowedCommand("whois", "registration lookup", ArgGrammar()),
+    # The first attack-tier wraith. Template-based web vulnerability scanner.
+    # Deliberately NOT allowed: -t/-w/-l (load templates, workflows or target
+    # lists from arbitrary paths or URLs), -o (file write), -H (headers), the
+    # headless / code / fuzzing engines, and interactsh (-ni is forced: OOB
+    # callbacks would make the *target* contact an outside server — traffic
+    # that leaves the authorized scope).
+    "nuclei": AllowedCommand(
+        "nuclei", "template-based web vulnerability scan (detection only)",
+        ArgGrammar(flags={"-silent", "-jsonl", "-nc", "-duc", "-ni"},
+                   value_flags={"-tags": _nuclei_tags,
+                                "-severity": _nuclei_severity,
+                                "-rl": _int_between(1, 50),
+                                "-timeout": _int_between(1, 30)},
+                   target_value_flags={"-u"}),
+        tier=TIER_ATTACK,
+    ),
 }
+
+
+def tier_of(binary: str) -> int:
+    """Risk tier of a tool. Unknown tools get an unreachable tier (deny)."""
+    cmd = REGISTRY.get(binary)
+    return cmd.tier if cmd is not None else 99
 
 
 def parse_args(binary: str, args: List[str]) -> Tuple[List[str], Optional[str]]:
@@ -225,7 +282,10 @@ def _simulate(spec: CommandSpec) -> str:
     from .lab import resolve_box, LAB  # local import avoids a cycle at load
 
     line = spec.as_cmdline()
-    box = resolve_box(spec.targets)
+    # attack-tier tools take URLs; the lab is keyed by host
+    from urllib.parse import urlsplit
+    hosts = [urlsplit(t).hostname or t if "://" in t else t for t in spec.targets]
+    box = resolve_box(hosts)
     if box is None:
         return f"[simulated] {line}\n(no host at that target in the lab)"
     ip = box.ip
@@ -260,6 +320,21 @@ def _simulate(spec: CommandSpec) -> str:
         # the title is attacker-controlled content (intentional test payload)
         return f"http://{ip} [200] [{box.web_title}] [{box.web_tech}]"
 
+    if spec.binary == "nuclei":
+        # emit the same JSON-lines shape real `nuclei -jsonl` prints, so one
+        # parser handles both simulated and real runs
+        import json
+        base = next((t for t in spec.targets if "://" in t), f"http://{ip}").rstrip("/")
+        if box.web_endpoint_port() is None:
+            return ""
+        return "\n".join(json.dumps({
+            "template-id": v["id"],
+            "info": {"name": v["name"], "severity": v["severity"]},
+            "type": "http", "host": base,
+            "matched-at": base + str(v.get("path", "/")),
+            "extracted-results": list(v.get("evidence", [])),
+        }) for v in box.vulns)
+
     if spec.binary == "dig":
         return f";; connection to {ip} — no zone transfer allowed"
     return f"[simulated] {line}\n(no notable output)"
@@ -279,6 +354,11 @@ def _with_structured_output(spec: CommandSpec) -> List[str]:
             args.append("-json")
         if "-silent" not in args:
             args.append("-silent")
+    if spec.binary == "nuclei":
+        args += [f for f in NUCLEI_FORCED_FLAGS if f not in args]
+        args += ["-etags", NUCLEI_EXCLUDED_TAGS]
+        if "-rl" not in args:
+            args += ["-rl", "10"]   # gentle default: 10 requests / second
     return args
 
 

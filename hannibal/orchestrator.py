@@ -71,6 +71,32 @@ class Orchestrator:
             "note", f"inconclusive:{goal}", f"phase inconclusive — {goal}",
             {"phase": goal}, None, host))
 
+    def _ask_approval(self, spec: CommandSpec, tier: int) -> bool:
+        """Human-in-the-loop gate for commands above max_auto_tier."""
+        if self.cfg.approval != "prompt":
+            return False
+        with self._print_lock:   # one question at a time across wraiths
+            try:
+                ans = input(f"\n  ⚔ approve tier-{tier} "
+                            f"({cmd.TIER_NAMES.get(tier, '?')}) command?\n"
+                            f"    {spec.as_cmdline()}\n    [y/N] ")
+            except EOFError:      # no operator attached -> deny
+                return False
+        return ans.strip().lower() in ("y", "yes")
+
+    def _note_held(self, spec: CommandSpec, tier: int, task_id: int) -> None:
+        """Record a held command so the report shows what was NOT done, and the
+        planner treats the phase as resolved instead of re-queuing it."""
+        from urllib.parse import urlsplit
+        t = (spec.targets or ["target"])[0]
+        host = urlsplit(t).hostname if "://" in t else t
+        self.store.add_finding(Finding(
+            "note", f"held:{host}:{spec.binary}",
+            f"awaiting approval — tier {tier}: {spec.as_cmdline()}",
+            {"phase": "vulnscan" if spec.binary == "nuclei" else spec.binary,
+             "status": "awaiting_approval", "tier": tier,
+             "cmd": spec.as_cmdline()}, task_id, host))
+
     def _build_brain(self) -> Brain:
         if self.cfg.backend == "mock":
             return MockBrain()
@@ -115,23 +141,40 @@ class Orchestrator:
             self._log(f"  ⃠ [out-of-scope] {spec.as_cmdline()} — {decision.reason}")
             return
 
-        # 3. budget
+        # 3. rules of engagement: commands above the auto tier need a human.
+        # Checked after scope, so an out-of-scope command is never even offered
+        # for approval.
+        tier = cmd.tier_of(spec.binary)
+        if tier > self.cfg.max_auto_tier:
+            approved = self._ask_approval(spec, tier)
+            self.audit.record("approval_decision", task=task.id,
+                              cmd=spec.as_cmdline(), tier=tier,
+                              mode=self.cfg.approval, approved=approved)
+            if not approved:
+                reason = (f"tier {tier} ({cmd.TIER_NAMES.get(tier, '?')}) "
+                          f"needs approval — held")
+                self.store.finish_task(task.id, "held", reason)
+                self._note_held(spec, tier, task.id)
+                self._log(f"  ⏸ [held] {spec.as_cmdline()} — {reason}")
+                return
+
+        # 4. budget
         stop = self.budget.check()
         if stop:
             self.store.finish_task(task.id, "blocked", f"budget: {stop}")
             return
         self.budget.add_command()
 
-        # 4. execute (or simulate)
+        # 5. execute (or simulate)
         self.audit.record("command_exec", task=task.id, cmd=spec.as_cmdline(),
                           mode="execute" if self.cfg.execute else "dry-run")
         output = cmd.run(spec, self.cfg.execute, self.cfg.command_timeout)
         self.store.finish_task(task.id, "done", output)
 
-        # 5. parse -> findings (+ injection scan on untrusted output)
+        # 6. parse -> findings (+ injection scan on untrusted output)
         findings, sr = parse(spec, output, task.id)
 
-        # 5b. second-stage semantic judge: only when the regex pass is clean,
+        # 6b. second-stage semantic judge: only when the regex pass is clean,
         # so the model cost is paid only where it might catch something new
         if self.judge is not None and not sr.suspicious and self.judge.judge(output):
             sr.suspicious = True

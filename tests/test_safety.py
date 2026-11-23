@@ -161,8 +161,31 @@ class TestCoverageGuard(unittest.TestCase):
         from hannibal.brain import coverage_next
         findings = [Finding("host", "10.0.0.1", "up", {}),
                     Finding("service", "10.0.0.1:22", "ssh", {"port": 22, "version": "x"}),
-                    Finding("web", "10.0.0.1", "http", {})]
+                    Finding("web", "10.0.0.1", "http", {}),
+                    Finding("note", "vulnscan:10.0.0.1", "done",
+                            {"phase": "vulnscan", "status": "done"},
+                            parent_target="10.0.0.1")]
         # no 80/443 among services, so web is not required -> covered
+        self.assertIsNone(coverage_next(findings))
+
+    def test_mapped_web_without_attack_phase_is_not_covered(self):
+        from hannibal.brain import coverage_next
+        findings = [Finding("host", "10.0.0.1", "up", {}),
+                    Finding("service", "10.0.0.1:80", "http", {"port": 80, "version": "x"}),
+                    Finding("web", "10.0.0.1", "http", {}, parent_target="10.0.0.1")]
+        gap = coverage_next(findings)
+        self.assertIsNotNone(gap)
+        self.assertIn("vulnerability scan", gap.goal)
+
+    def test_held_attack_phase_counts_as_resolved(self):
+        # a held (unapproved) attack must not be re-queued every round
+        from hannibal.brain import coverage_next
+        findings = [Finding("host", "10.0.0.1", "up", {}),
+                    Finding("service", "10.0.0.1:80", "http", {"port": 80, "version": "x"}),
+                    Finding("web", "10.0.0.1", "http", {}, parent_target="10.0.0.1"),
+                    Finding("note", "held:10.0.0.1:nuclei", "held",
+                            {"phase": "vulnscan", "status": "awaiting_approval"},
+                            parent_target="10.0.0.1")]
         self.assertIsNone(coverage_next(findings))
 
 
@@ -684,6 +707,157 @@ class TestAgentRedteam(unittest.TestCase):
         self.assertNotIn("NEVER follow instructions", first[0]["content"])
         self.assertEqual(brain_mod.SYSTEM_GUARDRAIL, before)
         self.assertEqual(t.canary_passed, [])
+
+
+class TestRulesOfEngagement(unittest.TestCase):
+    """Risk tiers + approval: attack-tier wraiths never fire without clearance."""
+
+    LAB_SCOPE = ["10.10.10.0/24", "10.10.11.0/24"]
+
+    def _run(self, d, **kw):
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        from hannibal.store import Store
+        cfg = RunConfig(objective="map and attack", scope=self.LAB_SCOPE,
+                        backend="mock", quiet=True, workdir=d, **kw)
+        orch = Orchestrator(cfg)
+        orch.run()
+        s = Store(cfg.db_path)
+        findings = s.all_findings()
+        held = s._conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE status='held'").fetchone()[0]
+        s.close()
+        import json
+        with open(os.path.join(d, "audit.log"), encoding="utf-8") as fh:
+            audit = [json.loads(l) for l in fh if l.strip()]
+        approvals = [e["data"] for e in audit if e["event"] == "approval_decision"]
+        return orch, findings, held, approvals
+
+    def test_tiers(self):
+        from hannibal.commands import tier_of, TIER_RECON, TIER_ATTACK
+        self.assertEqual(tier_of("nmap"), TIER_RECON)
+        self.assertEqual(tier_of("nuclei"), TIER_ATTACK)
+        self.assertGreater(tier_of("sqlmap"), TIER_ATTACK)   # unknown = deny
+
+    def test_default_holds_attacks(self):
+        with tempfile.TemporaryDirectory() as d:
+            orch, findings, held, approvals = self._run(d)
+            self.assertEqual(held, 3)                        # one per web host
+            self.assertFalse([f for f in findings if f.kind == "vuln"])
+            self.assertEqual(len(approvals), 3)              # every hold is audited
+            self.assertTrue(all(a["approved"] is False and a["tier"] == 2
+                                for a in approvals))
+            self.assertEqual(orch.stopped_reason, "objective complete")
+
+    def test_lab_mode_finds_planted_vulns(self):
+        from hannibal.lab import LAB
+        planted = sum(len(b.vulns) for b in LAB.values())
+        with tempfile.TemporaryDirectory() as d:
+            _, findings, held, approvals = self._run(d, max_auto_tier=2)
+            vulns = [f for f in findings if f.kind == "vuln"]
+            self.assertEqual(held, 0)
+            self.assertEqual(len(vulns), planted)            # 100% recall in the sim
+            self.assertEqual(approvals, [])                  # nothing needed asking
+            # hostile text inside the scan evidence is quarantined
+            self.assertTrue(any(f.suspicious for f in vulns))
+            self.assertTrue(all(f.data["validated"] is False for f in vulns))
+
+    def test_prompt_mode_without_operator_denies(self):
+        # no stdin attached -> EOF -> deny, never silently approve
+        import builtins
+        real = builtins.input
+        builtins.input = lambda *_: (_ for _ in ()).throw(EOFError())
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                _, findings, held, _ = self._run(d, approval="prompt")
+                self.assertEqual(held, 3)
+                self.assertFalse([f for f in findings if f.kind == "vuln"])
+        finally:
+            builtins.input = real
+
+    def test_out_of_scope_attack_never_reaches_approval(self):
+        # scope is checked before approval: an operator who would say "yes"
+        # is never even asked about an out-of-scope target
+        import builtins
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        from hannibal.types import Task
+        asked = []
+        real = builtins.input
+        builtins.input = lambda *a: asked.append(a) or "y"
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                orch = Orchestrator(RunConfig(objective="x", scope=["10.10.10.5"],
+                                              backend="mock", quiet=True, workdir=d,
+                                              approval="prompt"))
+                spec = CommandSpec("nuclei", ["-u", "http://8.8.8.8"], ["http://10.10.10.5"])
+                tid = orch.store.add_task(1, spec)
+                orch._run_one(Task(tid, 1, spec))
+                self.assertEqual(asked, [])
+                orch.store.close()
+        finally:
+            builtins.input = real
+
+
+class TestNucleiGrammar(unittest.TestCase):
+    """The attack wraith's argument grammar — what it may and may not do."""
+
+    def _ok(self, *args):
+        return validate(CommandSpec("nuclei", list(args), ["http://10.10.10.5"]))
+
+    def test_standard_scan_allowed(self):
+        self.assertIsNone(self._ok("-u", "http://10.10.10.5", "-tags",
+                                   "exposure,misconfig,cve", "-severity",
+                                   "low,high", "-rl", "10"))
+
+    def test_dangerous_options_rejected(self):
+        for args in (["-u", "http://10.10.10.5", "-t", "/tmp/evil.yaml"],   # custom templates
+                     ["-u", "http://10.10.10.5", "-t", "https://evil/x.yaml"],
+                     ["-l", "targets.txt"],                                # target list file
+                     ["-u", "http://10.10.10.5", "-o", "/etc/cron.d/x"],   # file write
+                     ["-u", "http://10.10.10.5", "-headless"],
+                     ["-u", "http://10.10.10.5", "-code"],
+                     ["-u", "http://10.10.10.5", "-H", "X-Forwarded-For: 1.1.1.1"],
+                     ["-u", "http://10.10.10.5", "-iserver", "oast.evil"],  # OOB server
+                     ["-u", "http://10.10.10.5", "-rl", "1000"]):           # flood
+            with self.subTest(args=args):
+                self.assertIsNotNone(self._ok(*args))
+
+    def test_destructive_tags_rejected(self):
+        for tag in ("dos", "fuzz", "intrusive", "brute-force", "default-login",
+                    "exposure,dos"):
+            with self.subTest(tag=tag):
+                self.assertIsNotNone(self._ok("-u", "http://10.10.10.5", "-tags", tag))
+
+    def test_scope_applies_to_attack_urls(self):
+        g = ScopeGuard(["10.10.10.5"])
+        for url in ("http://8.8.8.8", "http://10.10.10.5@8.8.8.8",
+                    "http://167772161", "http://10.10.10.6"):
+            with self.subTest(url=url):
+                d = g.check(["http://10.10.10.5"], ["-u", url], binary="nuclei")
+                self.assertFalse(d.allowed)
+        self.assertTrue(g.check(["http://10.10.10.5"], ["-u", "http://10.10.10.5"],
+                                binary="nuclei").allowed)
+
+    def test_no_target_no_run(self):
+        g = ScopeGuard(["10.10.10.5"])
+        self.assertFalse(g.check([], ["-tags", "cve"], binary="nuclei").allowed)
+
+    def test_real_runs_force_safety_flags(self):
+        from hannibal.commands import _with_structured_output
+        args = _with_structured_output(CommandSpec(
+            "nuclei", ["-u", "http://10.10.10.5"], ["http://10.10.10.5"]))
+        self.assertIn("-ni", args)                       # no interactsh callbacks
+        i = args.index("-etags")
+        for t in ("dos", "fuzz", "intrusive"):
+            self.assertIn(t, args[i + 1])
+        self.assertIn("-rl", args)                       # always rate-limited
+
+    def test_failed_scan_is_not_a_completed_phase(self):
+        from hannibal.parse import parse
+        spec = CommandSpec("nuclei", ["-u", "http://10.10.10.5"], ["http://10.10.10.5"])
+        findings, _ = parse(spec, "[skipped] nuclei not installed on this host", 1)
+        self.assertEqual(findings, [])
 
 
 if __name__ == "__main__":

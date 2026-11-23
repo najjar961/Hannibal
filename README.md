@@ -9,7 +9,7 @@
 
 A *Commander* LLM sets objectives, *Generals* turn them into concrete recon tasks, and a pool of parallel *Wraith* workers execute allow-listed commands and report findings back up the chain. The Commander reads the findings and decides what to do next, until the objective is mapped or a budget runs out.
 
-The interesting part isn't the hierarchy — that's a few hundred lines. The interesting part is everything that sits between *"the model wants to run a command"* and *"a command actually runs"*: scope enforcement, a recon-only allowlist, a tamper-evident audit log, prompt-injection quarantine, and a hard budget / kill-switch. This is built as a **learning and portfolio project**, to be run **only against systems you own or are authorized to test** (your own lab, Hack The Box, TryHackMe).
+The interesting part isn't the hierarchy — that's a few hundred lines. The interesting part is everything that sits between *"the model wants to run a command"* and *"a command actually runs"*: scope enforcement, a tiered command allowlist (recon runs on its own, attacks need clearance), a tamper-evident audit log, prompt-injection quarantine, and a hard budget / kill-switch. This is built as a **learning and portfolio project**, to be run **only against systems you own or are authorized to test** (your own lab, Hack The Box, TryHackMe).
 
 > Runs with **zero setup and zero network traffic** in its default dry-run mode: the full loop is driven by a deterministic simulator, so you can see exactly how it behaves before pointing it at anything.
 
@@ -22,7 +22,8 @@ An autonomous agent that reads attacker-controlled output (HTTP titles, banners,
 | Control | What it does | Where |
 |---|---|---|
 | **Scope guard** | Deny by default: checks the declared targets *and* every target the tool will actually see (split out by a per-tool argument grammar). Only canonical IPs/CIDRs inside scope or exactly allow-listed hosts pass — nmap ranges, wildcards, integer/hex IPs and URL-userinfo tricks are rejected. DNS-widening is off by default. | `scope.py` |
-| **Command allowlist** | Only recon tools (`nmap`, `httpx`, `whatweb`, `dig`, `whois`), each with a full argument grammar: every flag *and* flag value is validated, output goes to stdout only (no file-writing flags), and `-A`/`-sC` are off so the safe-script list can't be sidestepped. No shell, ever (`shell=False`). | `commands.py` |
+| **Rules of engagement** | Every tool has a risk tier — 1 = recon, 2 = attack. Only tiers up to `--max-auto-tier` (default 1) run on their own; anything higher is held (logged, shown in the report, never run) or put to the operator as a y/N prompt. Checked *after* scope, so an out-of-scope command is never even offered for approval. | `orchestrator.py`, `commands.py` |
+| **Command allowlist** | Recon tools (`nmap`, `httpx`, `whatweb`, `dig`, `whois`) plus one attack-tier tool (`nuclei`, detection templates only), each with a full argument grammar: every flag *and* flag value is validated, output goes to stdout only (no file-writing flags), and `-A`/`-sC` are off so the safe-script list can't be sidestepped. No shell, ever (`shell=False`). | `commands.py` |
 | **Injection quarantine** | Untrusted output is fenced in unspoofable delimiters and scanned for override patterns; flagged findings are marked `suspicious` and can never widen scope. | `injection.py` |
 | **Tamper-evident audit** | Every decision is a hash-chained JSON line; changing one past byte breaks verification of every line after it. Set `HANNIBAL_AUDIT_KEY` and each entry is also HMAC-signed — unforgeable without the key. | `audit.py` |
 | **Budget / kill-switch** | Hard caps on rounds, wall-time, tokens and commands, checked before every round and every command. | `budget.py` |
@@ -155,9 +156,47 @@ If the model returns malformed JSON, the brain falls back to deterministic rules
 
 ---
 
+## The attack phase — Generals order, Wraiths strike
+
+Recon maps the battlefield; the attack phase is where Wraiths try to break in.
+Once a host's web surface is mapped, the Commander issues a
+`vulnerability scan on <host>` objective, the General turns it into a `nuclei`
+order, and the Wraith reports back each weakness it hits as a `vuln` finding
+with a severity, the matched URL and the evidence.
+
+Attacks are **tier 2**, so by default they are *held*, not run:
+
+```bash
+hannibal run -o "map and attack the lab" -s 10.10.10.0/24,10.10.11.0/24
+#   ⏸ [held] nuclei -u http://10.10.10.5 ... — tier 2 (attack) needs approval
+
+# ask me for each attack
+hannibal run -o "..." -s 10.10.10.0/24 --approve prompt
+
+# my own isolated lab: Wraiths are cleared to attack on their own
+hannibal run -o "..." -s 10.10.10.0/24,10.10.11.0/24 --max-auto-tier 2
+#   ✓ nuclei http://10.10.11.20 → [HIGH] Environment file with secrets exposed
+#   ⚑ nuclei http://10.10.11.33 → evidence carried an injection → quarantined
+```
+
+The attack Wraith is boxed in like every other: only detection template tags
+(`exposure`, `misconfig`, `cve`, …), no custom templates, template lists, files
+or headers, a rate limit capped at 50 req/s (default 10), and on real runs
+`-ni` (no interactsh, so a target is never made to call out to a server
+outside scope) plus `-etags dos,fuzz,intrusive,brute-force,default-login`.
+Evidence comes from the target, so every `vuln` finding is injection-scanned.
+
+In the simulated lab every web box has planted weaknesses, so the attack phase
+is scored against ground truth (5/5 found, 1 hostile payload quarantined).
+
+A `nuclei` match is a **detection, not proof**: findings carry
+`validated: false` until a validator Wraith confirms them (roadmap).
+
+---
+
 ## Safety model in one paragraph
 
-Hannibal will not run a command whose binary is not on the recon allowlist, will not run a command that touches a target outside the scope you pass on the command line, will not follow instructions found in tool output, and will not exceed the budgets you set. The default mode never spawns a real process at all. `--execute` is opt-in and prints a warning. None of these are suggestions to the model — they are enforced in code on the execution path, and every decision is written to an audit log you can verify.
+Hannibal will not run a command whose binary is not on the allowlist, will not run a command that touches a target outside the scope you pass on the command line, will not run an attack-tier command without clearance (`--max-auto-tier` / `--approve`), will not follow instructions found in tool output, and will not exceed the budgets you set. The default mode never spawns a real process at all. `--execute` is opt-in and prints a warning. None of these are suggestions to the model — they are enforced in code on the execution path, and every decision is written to an audit log you can verify.
 
 ---
 
@@ -167,7 +206,7 @@ Hannibal will not run a command whose binary is not on the recon allowlist, will
 python3 -m unittest discover -s tests -v
 ```
 
-The suite asserts the guards actually **block**: out-of-scope targets (including ones hidden in args), non-recon binaries, shell metacharacters, unsafe nmap scripts, injection strings, and audit tampering.
+The suite asserts the guards actually **block**: out-of-scope targets (including ones hidden in args and attack URLs), non-allowlisted binaries, shell metacharacters, unsafe nmap scripts, dangerous nuclei options and tags, attacks without clearance (including a prompt with no operator attached), injection strings, and audit tampering.
 
 ### Signed audit log (tamper-evident → tamper-proof)
 
@@ -459,7 +498,7 @@ hannibal/
   orchestrator.py      round loop + parallel workers
   brain.py             MockBrain (deterministic) + LLMBrain (real model)
   scope.py             scope enforcement
-  commands.py          recon allowlist + runner + simulator
+  commands.py          tiered allowlist (recon / attack) + runner + simulator
   injection.py         untrusted-output quarantine + regex scanner + deobfuscation
   semantic.py          second-stage model judge (intent-based injection detection)
   audit.py             hash-chained audit log
@@ -467,7 +506,7 @@ hannibal/
   store.py             SQLite queue + findings graph (Mermaid export)
   htmlreport.py        self-contained HTML scan report
   parse.py             simulator output → structured findings
-  realparse.py         real nmap -oX XML / httpx -json → findings
+  realparse.py         real nmap -oX XML / httpx -json / nuclei -jsonl → findings
   lab.py               simulated lab fixtures + real-box loader (load_boxes)
   redteam_corpus.py    injection payloads + benign banners (ground truth)
   agent_redteam.py     canary scenarios, trial runner and scoring for the agent red-team
@@ -495,6 +534,10 @@ tests/test_safety.py   control tests
 - [x] Red-team the scope guard itself; make it deny-by-default with a per-tool argument grammar
 - [x] Agent-level red-team harness: hostile banners → model → guard, scored on *followed* vs *got through* (runs in CI with a scripted hijacked brain)
 - [x] Midrecon box mode so the agent red-team measures real model following (honest next step exists), not passivity
+- [x] Rules of engagement: risk tiers + approval gate (hold / prompt / lab auto-clear)
+- [x] First attack-tier Wraith: `nuclei` vulnerability scan, scored against planted lab weaknesses
+- [ ] Validator Wraith: confirm each detection with a minimal proof before it counts
+- [ ] Continuous watch mode: re-attack only what changed, measure time-to-detection
 - [ ] Live *followed* numbers from an instruct model that plans (the uncensored chat tunes tested declared recon done regardless)
 - [ ] Run wraiths unprivileged in a container with egress limited to scope
 

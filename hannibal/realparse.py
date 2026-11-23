@@ -101,3 +101,48 @@ def parse_httpx_json(output: str, task_id: int) -> List[Finding]:
              "title": title, "tech": tech_s},
             task_id, host, suspicious=scan(f"{title} {tech_s}").suspicious))
     return findings
+
+
+_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+
+def parse_nuclei_jsonl(output: str, task_id: int, host: str) -> List[Finding]:
+    """nuclei -jsonl → one `vuln` finding per match, plus a phase marker.
+
+    Every field here (template name, matched URL, extracted results) comes from
+    the target or from what the target returned, so each finding is scanned
+    for injection individually. The marker note tells the planner the attack
+    phase for `host` ran, even when it found nothing.
+
+    A nuclei match is a *detection*, not proof of exploitability; findings are
+    tagged validated=False until a validator wraith confirms them.
+    """
+    findings: List[Finding] = []
+    for line in output.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        info = obj.get("info") or {}
+        tid = str(obj.get("template-id", "unknown"))
+        name = str(info.get("name", tid))
+        sev = str(info.get("severity", "info")).lower()
+        if sev not in _SEVERITY_RANK:
+            sev = "info"
+        matched = str(obj.get("matched-at") or obj.get("host") or host)
+        evidence = [str(e)[:300] for e in (obj.get("extracted-results") or [])][:5]
+        findings.append(Finding(
+            "vuln", f"{matched} [{tid}]", f"[{sev.upper()}] {name}",
+            {"template": tid, "severity": sev, "matched_at": matched,
+             "evidence": evidence, "validated": False},
+            task_id, host,
+            suspicious=scan(" ".join([name, matched, *evidence])).suspicious))
+    n = len(findings)
+    findings.append(Finding(
+        "note", f"vulnscan:{host}",
+        f"attack phase complete on {host} — {n} issue(s) detected",
+        {"phase": "vulnscan", "status": "done", "issues": n}, task_id, host))
+    return findings

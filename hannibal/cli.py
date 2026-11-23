@@ -50,6 +50,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         workers=a.workers, max_rounds=a.max_rounds, max_seconds=a.max_seconds,
         max_tokens=a.max_tokens, max_commands=a.max_commands,
         execute=a.execute, workdir=a.workdir, semantic=a.semantic,
+        max_auto_tier=a.max_auto_tier, approval=a.approve,
     )
     if not cfg.scope:
         print("error: --scope is required (the authorized targets)", file=sys.stderr)
@@ -57,6 +58,10 @@ def cmd_run(a: argparse.Namespace) -> int:
     if a.execute:
         print("⚠  EXECUTE mode: real recon tools will run against the scope above.")
         print("   Only proceed on systems you own or are authorized to test.\n")
+    if a.execute and a.max_auto_tier >= 2:
+        print("⚠  ATTACK tier auto-approved: vulnerability probes will run "
+              "without asking.")
+        print("   Use this only in your own isolated lab.\n")
     Orchestrator(cfg).run()
     return 0
 
@@ -142,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--base-url", default="http://localhost:11434/v1")
     r.add_argument("--api-key", default="")
     r.add_argument("--workers", type=int, default=4)
-    r.add_argument("--max-rounds", type=int, default=6)
+    r.add_argument("--max-rounds", type=int, default=8)
     r.add_argument("--max-seconds", type=int, default=600)
     r.add_argument("--max-tokens", type=int, default=200_000)
     r.add_argument("--max-commands", type=int, default=200)
@@ -151,6 +156,13 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--semantic", action="store_true",
                    help="enable the model-based second-stage injection judge "
                         "(needs a real --backend; catches paraphrase/multilingual)")
+    r.add_argument("--max-auto-tier", type=int, default=1, choices=[1, 2],
+                   help="highest risk tier that runs without a human: "
+                        "1 = recon only (default), 2 = attack wraiths too "
+                        "(only for your own isolated lab)")
+    r.add_argument("--approve", default="deny", choices=["deny", "prompt"],
+                   help="commands above --max-auto-tier: 'deny' holds them "
+                        "(default), 'prompt' asks you y/N for each one")
     r.add_argument("--workdir", default="hannibal_run")
     r.set_defaults(func=cmd_run)
 

@@ -162,7 +162,11 @@ def to_mermaid(findings: List[Finding]) -> str:
 
     # nodes for every finding, then edges from each finding's parent host
     for f in findings:
-        emit(f.kind, f.target, f"{f.kind}: {f.target}", f.suspicious)
+        if f.kind == "vuln":
+            label = f"vuln {f.data.get('severity', '?').upper()}: {f.data.get('template', f.target)}"
+        else:
+            label = f"{f.kind}: {f.target}"
+        emit(f.kind, f.target, label, f.suspicious)
     for f in findings:
         if not f.parent_target:
             continue

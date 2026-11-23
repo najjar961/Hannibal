@@ -88,7 +88,16 @@ def _host_next(findings: List[Finding], host: str):
                                 "turn open ports into service facts")
     if (80 in ports or 443 in ports) and not _has_for(findings, "web", host):
         return GeneralObjective(f"web fingerprinting on {host}", "titles and tech")
+    if _has_for(findings, "web", host) and not _attack_phase_resolved(findings, host):
+        return GeneralObjective(f"vulnerability scan on {host}",
+                                "attack the mapped web surface and report what breaks")
     return None
+
+
+def _attack_phase_resolved(findings: List[Finding], host: str) -> bool:
+    """The attack phase for `host` ran, or was held for approval."""
+    return any(f.kind == "note" and f.data.get("phase") == "vulnscan"
+               and _host_of(f, host) for f in findings)
 
 
 def rule_plan(objective: str, findings: List[Finding]) -> Plan:
@@ -103,7 +112,8 @@ def rule_plan(objective: str, findings: List[Finding]) -> Plan:
     if objs:
         return Plan(False, f"enumerating {len(hosts)} host(s) — {len(objs)} with work left",
                     objs)
-    return Plan(True, "recon complete: every discovered host mapped (ports, services, web)")
+    return Plan(True, "campaign complete: every host mapped (ports, services, web) "
+                      "and every web surface attacked or held for approval")
 
 
 def _host_from_goal(goal: str, findings: List[Finding], scope: List[str]) -> str:
@@ -114,6 +124,15 @@ def _host_from_goal(goal: str, findings: List[Finding], scope: List[str]) -> str
 def rule_decompose(goal: str, findings: List[Finding],
                    scope: List[str]) -> List[CommandSpec]:
     g = goal.lower()
+    if "vuln" in g or "attack" in g:
+        host = _host_from_goal(goal, findings, scope)
+        ports = _open_ports_for(findings, host)
+        scheme = "https" if 443 in ports and 80 not in ports else "http"
+        url = f"{scheme}://{host}"
+        return [CommandSpec("nuclei", ["-u", url, "-tags", "exposure,misconfig,cve",
+                                       "-severity", "low,medium,high,critical",
+                                       "-rl", "10"],
+                            [url], f"scan the web surface of {host} for known weaknesses")]
     if "discovery" in g or "sweep" in g:
         targets = list(scope) or ["target"]
         return [CommandSpec("nmap", ["-sn", *targets], targets,
@@ -163,6 +182,8 @@ def _phase_satisfied(goal: str, specs: List[CommandSpec]) -> bool:
     """
     g = goal.lower()
     joined = " ".join(s.as_cmdline() for s in specs)
+    if "vuln" in g or "attack" in g:
+        return any(s.binary == "nuclei" for s in specs)
     if "service" in g:
         return "-sV" in joined
     if "web" in g:
@@ -197,12 +218,15 @@ class MockBrain:
 _PLAN_SCHEMA = (
     'Return JSON only: {"done": bool, "reason": str, '
     '"objectives": [{"goal": str, "rationale": str}]}. '
-    "Set done=true when hosts, services and any web surface are mapped."
+    "Set done=true when hosts, services and any web surface are mapped AND every "
+    "web surface has had a 'vulnerability scan on <ip>' objective."
 )
 _DECOMPOSE_SCHEMA = (
     'Return JSON only: {"commands": [{"binary": str, "args": [str], '
     '"targets": [str], "rationale": str}]}. '
-    "binary must be one of: nmap, httpx, whatweb, dig, whois. "
+    "binary must be one of: nmap, httpx, whatweb, dig, whois, nuclei. "
+    "Use nuclei only for vulnerability-scan objectives, e.g. args "
+    '["-u", "http://<ip>", "-tags", "exposure,misconfig,cve", "-rl", "10"]. '
     "Only use targets from the authorized scope."
 )
 

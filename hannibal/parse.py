@@ -24,6 +24,15 @@ def parse(spec: CommandSpec, output: str, task_id: int) -> List[Finding]:
     # real structured output first (from --execute). The simulator emits text,
     # which falls through to the regex parsing below.
     sr = scan(output)
+    if spec.binary == "nuclei":
+        # tool output we couldn't get (not installed / timeout) is not a
+        # completed phase — return nothing so the planner can retry or give up
+        if output.startswith(("[skipped]", "[timeout]", "[error]")):
+            return [], sr
+        from urllib.parse import urlsplit
+        url = next((t for t in spec.targets if "://" in t), "")
+        host = urlsplit(url).hostname or (spec.targets or ["target"])[0]
+        return realparse.parse_nuclei_jsonl(output, task_id, host), sr
     if realparse.looks_like_nmap_xml(output):
         return realparse.parse_nmap_xml(output, task_id), sr
     if realparse.looks_like_httpx_json(output):
