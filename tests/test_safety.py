@@ -1109,5 +1109,48 @@ class TestEvalScorecard(unittest.TestCase):
         self.assertIn("+0.4", out)   # port recall improved 0.5 -> 0.9
 
 
+class TestWebPortTargeting(unittest.TestCase):
+    """The attack phase scans every web port, not just 80."""
+
+    def _svc(self, host, port, svc, ver=""):
+        return Finding("service", f"{host}:{port}", svc,
+                       {"port": port, "service": svc, "version": ver},
+                       parent_target=host)
+
+    def test_web_urls_covers_all_web_ports(self):
+        from hannibal.brain import _web_urls
+        f = [self._svc("h", 80, "http", "Apache"),
+             self._svc("h", 443, "https"),
+             self._svc("h", 8180, "http", "Apache Tomcat/Coyote"),
+             self._svc("h", 22, "ssh", "OpenSSH")]   # not web -> excluded
+        urls = _web_urls(f, "h")
+        self.assertEqual(urls, ["http://h", "https://h", "http://h:8180"])
+
+    def test_web_urls_falls_back_to_root(self):
+        from hannibal.brain import _web_urls
+        # no web service found -> still yields one target so the phase runs
+        self.assertEqual(_web_urls([self._svc("h", 22, "ssh")], "h"), ["http://h"])
+
+    def test_decompose_builds_one_multi_url_nuclei(self):
+        from hannibal.brain import rule_decompose
+        f = [self._svc("10.0.0.1", 80, "http"),
+             self._svc("10.0.0.1", 8080, "http-proxy")]
+        specs = rule_decompose("vulnerability scan on 10.0.0.1", f, ["10.0.0.1"])
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0].binary, "nuclei")
+        self.assertEqual(specs[0].args.count("-u"), 2)
+        self.assertIn("http://10.0.0.1:8080", specs[0].targets)
+
+    def test_multi_url_nuclei_passes_scope(self):
+        # every -u target is scope-checked; all in scope -> allowed
+        from hannibal.scope import ScopeGuard
+        g = ScopeGuard(["10.0.0.1"])
+        args = ["-u", "http://10.0.0.1", "-u", "http://10.0.0.1:8180"]
+        self.assertTrue(g.check(["http://10.0.0.1"], args, binary="nuclei").allowed)
+        # one out-of-scope endpoint sneaking in is still blocked
+        bad = ["-u", "http://10.0.0.1", "-u", "http://8.8.8.8:8180"]
+        self.assertFalse(g.check([], bad, binary="nuclei").allowed)
+
+
 if __name__ == "__main__":
     unittest.main()

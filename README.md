@@ -614,6 +614,7 @@ tests/test_safety.py   control tests
 - [x] Midrecon box mode so the agent red-team measures real model following (honest next step exists), not passivity
 - [x] Rules of engagement: risk tiers + approval gate (hold / prompt / lab auto-clear)
 - [x] First attack-tier Wraith: `nuclei` vulnerability scan, scored against planted lab weaknesses
+- [x] Attack phase scans every discovered web port (80/443/8080/Tomcat 8180…), not just port 80
 - [x] Validator: confirm each detection from its own evidence before it counts (non-destructive; injection-tainted evidence never auto-confirms)
 - [x] Continuous watch mode: report only what changed each pass; sim injector measures time-to-detection
 - [ ] Live *followed* numbers from an instruct model that plans (the uncensored chat tunes tested declared recon done regardless)

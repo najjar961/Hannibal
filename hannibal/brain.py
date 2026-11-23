@@ -116,6 +116,47 @@ def rule_plan(objective: str, findings: List[Finding]) -> Plan:
                       "and every web surface attacked or held for approval")
 
 
+# ports and service banners that mean "there is a web server here"
+_WEB_PORTS = {80, 443, 8000, 8008, 8080, 8081, 8180, 8443, 8888}
+_WEB_SVC = re.compile(r"http|www|tomcat|coyote|jetty|http-proxy|http-alt", re.I)
+
+
+def _web_urls(findings: List[Finding], host: str) -> List[str]:
+    """Every web endpoint discovered on `host`, as nuclei-ready URLs.
+
+    A service is a web endpoint if it sits on a known web port or its name
+    looks like one. HTTPS is inferred from the port / banner. Falls back to the
+    host root so the attack phase always has at least one target.
+    """
+    endpoints = []            # (port, scheme)
+    seen = set()
+    for f in findings:
+        if f.kind not in ("service", "port") or not _host_of(f, host):
+            continue
+        port = (f.data or {}).get("port")
+        if not isinstance(port, int) or port in seen:
+            continue
+        svc = str((f.data or {}).get("service") or "")
+        ver = str((f.data or {}).get("version") or "")
+        if not (port in _WEB_PORTS or _WEB_SVC.search(svc) or _WEB_SVC.search(ver)):
+            continue
+        seen.add(port)
+        https = port in (443, 8443) or "https" in svc.lower() or "ssl" in svc.lower()
+        endpoints.append((port, "https" if https else "http"))
+
+    urls = []
+    for port, scheme in sorted(endpoints):
+        if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+            urls.append(f"{scheme}://{host}")
+        else:
+            urls.append(f"{scheme}://{host}:{port}")
+    if not urls:
+        ports = _open_ports_for(findings, host)
+        scheme = "https" if 443 in ports and 80 not in ports else "http"
+        urls = [f"{scheme}://{host}"]
+    return urls
+
+
 def _host_from_goal(goal: str, findings: List[Finding], scope: List[str]) -> str:
     m = re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", goal)
     return m.group(0) if m else _primary_host(findings, scope)
@@ -126,13 +167,17 @@ def rule_decompose(goal: str, findings: List[Finding],
     g = goal.lower()
     if "vuln" in g or "attack" in g:
         host = _host_from_goal(goal, findings, scope)
-        ports = _open_ports_for(findings, host)
-        scheme = "https" if 443 in ports and 80 not in ports else "http"
-        url = f"{scheme}://{host}"
-        return [CommandSpec("nuclei", ["-u", url, "-tags", "exposure,misconfig,cve",
-                                       "-severity", "low,medium,high,critical",
-                                       "-rl", "10"],
-                            [url], f"scan the web surface of {host} for known weaknesses")]
+        urls = _web_urls(findings, host)
+        args: List[str] = []
+        for u in urls:
+            args += ["-u", u]
+        args += ["-tags", "exposure,misconfig,cve",
+                 "-severity", "low,medium,high,critical", "-rl", "10"]
+        # one nuclei run covering every web endpoint (port 80, 443, 8080,
+        # app-server ports like Tomcat 8180, …) so the scan doesn't miss a web
+        # service just because it isn't on port 80
+        return [CommandSpec("nuclei", args, urls,
+                            f"scan {len(urls)} web endpoint(s) on {host}")]
     if "discovery" in g or "sweep" in g:
         targets = list(scope) or ["target"]
         return [CommandSpec("nmap", ["-sn", *targets], targets,
