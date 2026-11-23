@@ -66,6 +66,49 @@ graph TD
 
 ---
 
+## Real-world run — Metasploitable 2
+
+Beyond the deterministic sim, Hannibal has been run end-to-end against a live
+[Metasploitable 2](https://docs.rapid7.com/metasploit/metasploitable-2/) host on
+an isolated host-only network. One command, no human in the loop for recon:
+
+```bash
+hannibal run -o "map and attack metasploitable" -s <host> --execute --max-auto-tier 2
+```
+
+**Recon** (scored by `benchmark.py --targets`): **24/24 ports found (100% recall)**,
+**96% service-version recall**, web surface detected — fully autonomous, the
+Commander planning the whole host-discovery → port → service → web chain itself.
+
+**Known-weakness check** flagged **14 advisory leads, 5 critical**, straight from
+the real service banners:
+
+```
+CRITICAL  :21    vsftpd 2.3.4 backdoor                 [CVE-2011-2523]
+CRITICAL  :1524  Metasploitable bind shell
+CRITICAL  :3632  distccd remote command execution      [CVE-2004-2687]
+CRITICAL  :6667  UnrealIRCd backdoor                   [CVE-2010-2075]
+CRITICAL  :6697  UnrealIRCd backdoor                   [CVE-2010-2075]
+HIGH      :23    Cleartext Telnet exposed
+```
+
+**Attack phase** ran `nuclei` across every discovered web port (80 and Tomcat on
+8180) and found a real remote-code-execution flaw:
+
+```
+[HIGH] PHP CGI RCE — CVE-2012-1823 — http://<host>/index.php?-d+allow_url_include%3don...
+```
+
+The validator holds an RCE for manual review unless the response evidence shows
+code actually executing — so the tool never auto-declares a confirmed RCE from a
+bare detection. Every step is in the hash-chained audit log
+(`hannibal verify-audit`).
+
+All leads are advisory and were verified against a host built to be vulnerable;
+nothing here is run against systems without authorization.
+
+---
+
 ## Install
 
 No dependencies — Python 3.10+ standard library only. Clone and go, or install the
