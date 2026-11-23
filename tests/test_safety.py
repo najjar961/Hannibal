@@ -1271,5 +1271,66 @@ class TestRemediation(unittest.TestCase):
             self.assertIn("Recommendation", page)
 
 
+class TestWebCrawl(unittest.TestCase):
+    """Crawl step discovers endpoints and feeds them to the attack phase."""
+
+    def _ok(self, *args):
+        return validate(CommandSpec("katana", list(args), ["http://10.0.0.1"]))
+
+    def test_standard_crawl_allowed(self):
+        self.assertIsNone(self._ok("-u", "http://10.0.0.1", "-d", "2", "-silent"))
+
+    def test_dangerous_crawl_options_rejected(self):
+        for args in (["-u", "http://10.0.0.1", "-o", "/tmp/out"],      # file write
+                     ["-u", "http://10.0.0.1", "-proxy", "http://evil"],
+                     ["-u", "http://10.0.0.1", "-H", "Cookie: x"],     # custom headers
+                     ["-u", "http://10.0.0.1", "-aff"],                # auto form-fill
+                     ["-u", "http://10.0.0.1", "-headless"],
+                     ["-u", "http://10.0.0.1", "-d", "9"]):            # depth too deep
+            with self.subTest(args=args):
+                self.assertIsNotNone(self._ok(*args))
+
+    def test_parse_flags_parameterized(self):
+        from hannibal.realparse import parse_katana
+        out = "\n".join(["http://h/", "http://h/users/42", "http://h/x?id=1"])
+        f = parse_katana(out, 1, "h")
+        eps = [x for x in f if x.kind == "endpoint"]
+        self.assertEqual(len(eps), 3)
+        param = {x.target for x in eps if x.data.get("parameterized")}
+        self.assertIn("http://h/users/42", param)   # numeric path segment
+        self.assertIn("http://h/x?id=1", param)      # query string
+        self.assertNotIn("http://h/", param)
+
+    def test_crawl_feeds_attack_phase(self):
+        from hannibal.brain import _attack_urls
+        f = [Finding("service", "h:80", "http", {"port": 80, "service": "http"},
+                     parent_target="h"),
+             Finding("endpoint", "http://h/item?id=1", "parameterized",
+                     {"url": "http://h/item?id=1", "parameterized": True},
+                     parent_target="h")]
+        urls = _attack_urls(f, "h")
+        self.assertEqual(urls[0], "http://h/item?id=1")   # parameterized endpoint first
+
+    def test_lab_run_discovers_endpoints(self):
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        from hannibal.store import Store
+        with tempfile.TemporaryDirectory() as d:
+            cfg = RunConfig(objective="map and attack", backend="mock", quiet=True,
+                            workdir=d, max_auto_tier=2, scope=["10.10.10.0/24"])
+            Orchestrator(cfg).run()
+            s = Store(cfg.db_path)
+            eps = [f for f in s.all_findings() if f.kind == "endpoint"]
+            s.close()
+            self.assertTrue(eps)
+            self.assertTrue(any(f.data.get("parameterized") for f in eps))
+
+    def test_offhost_crawl_blocked(self):
+        from hannibal.scope import ScopeGuard
+        g = ScopeGuard(["10.0.0.1"])
+        self.assertFalse(g.check(["http://10.0.0.1"], ["-u", "http://8.8.8.8"],
+                                 binary="katana").allowed)
+
+
 if __name__ == "__main__":
     unittest.main()

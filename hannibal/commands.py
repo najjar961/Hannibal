@@ -191,6 +191,21 @@ REGISTRY: Dict[str, AllowedCommand] = {
                    target_value_flags={"-u"}),
         tier=TIER_ATTACK,
     ),
+    # web crawler (recon tier): discovers URLs/endpoints on a site, including
+    # parameterized ones — richer attack surface for nuclei, and the input a
+    # future access-control test needs. Crawl-only: no form submission
+    # (-aff/-fx), no headless browser, no file output (-o), no custom headers,
+    # no proxy. Stays on the target domain.
+    "katana": AllowedCommand(
+        "katana", "web crawler — discover endpoints (crawl only)",
+        ArgGrammar(flags={"-silent", "-nc", "-jsonl"},
+                   value_flags={"-d": _int_between(1, 3),
+                                "-c": _int_between(1, 20),
+                                "-rl": _int_between(1, 50),
+                                "-rd": _int_between(0, 10)},
+                   target_value_flags={"-u"}),
+        tier=TIER_RECON,
+    ),
 }
 
 
@@ -335,6 +350,12 @@ def _simulate(spec: CommandSpec) -> str:
             "extracted-results": list(v.get("evidence", [])),
         }) for v in box.vulns)
 
+    if spec.binary == "katana":
+        if box.web_endpoint_port() is None or not box.endpoints:
+            return ""
+        base = f"http://{ip}"
+        return "\n".join(base + path for path in box.endpoints)
+
     if spec.binary == "dig":
         return f";; connection to {ip} — no zone transfer allowed"
     return f"[simulated] {line}\n(no notable output)"
@@ -357,6 +378,14 @@ def _with_structured_output(spec: CommandSpec) -> List[str]:
     if spec.binary == "nuclei":
         args += [f for f in NUCLEI_FORCED_FLAGS if f not in args]
         args += ["-etags", NUCLEI_EXCLUDED_TAGS]
+        if "-rl" not in args:
+            args += ["-rl", "10"]   # gentle default: 10 requests / second
+    if spec.binary == "katana":
+        for f in ("-silent", "-nc"):
+            if f not in args:
+                args.append(f)
+        if "-d" not in args:
+            args += ["-d", "2"]
         if "-rl" not in args:
             args += ["-rl", "10"]   # gentle default: 10 requests / second
     return args

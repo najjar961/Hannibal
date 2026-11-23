@@ -24,6 +24,13 @@ def parse(spec: CommandSpec, output: str, task_id: int) -> List[Finding]:
     # real structured output first (from --execute). The simulator emits text,
     # which falls through to the regex parsing below.
     sr = scan(output)
+    if spec.binary == "katana":
+        if output.startswith(("[skipped]", "[timeout]", "[error]")):
+            return [], sr
+        from urllib.parse import urlsplit
+        t = (spec.targets or ["target"])[0]
+        host = urlsplit(t).hostname or t if "://" in t else t
+        return realparse.parse_katana(output, task_id, host), sr
     if spec.binary == "nuclei":
         # tool output we couldn't get (not installed / timeout) is not a
         # completed phase — return nothing so the planner can retry or give up

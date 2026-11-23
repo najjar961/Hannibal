@@ -176,6 +176,16 @@ def _attack_urls(findings: List[Finding], host: str, max_urls: int = 60) -> List
     """
     out: List[str] = []
     seen = set()
+    # crawled endpoints first — parameterized ones are the richest surface
+    endpoints = [str((f.data or {}).get("url"))
+                 for f in findings if f.kind == "endpoint" and _host_of(f, host)
+                 and (f.data or {}).get("url")]
+    for u in sorted(endpoints, key=lambda x: 0 if "?" in x else 1):
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+        if len(out) >= max_urls:
+            return out
     for base in _web_urls(findings, host):
         for path in _COMMON_WEB_PATHS:
             u = base.rstrip("/") + path
@@ -219,10 +229,15 @@ def rule_decompose(goal: str, findings: List[Finding],
         return [CommandSpec("nmap", ["-sV", "-p", plist, host], [host],
                             f"version-detect open ports on {host}")]
     if "web" in g:
+        ports = _open_ports_for(findings, host)
+        scheme = "https" if 443 in ports and 80 not in ports else "http"
+        base = f"{scheme}://{host}"
         return [
             CommandSpec("nmap", ["--script", "http-title", "-p", "80,443", host],
                         [host], f"grab web titles on {host}"),
             CommandSpec("whatweb", ["-a", "1", host], [host], f"fingerprint web tech on {host}"),
+            CommandSpec("katana", ["-u", base, "-d", "2"], [base],
+                        f"crawl the web surface of {host} for endpoints"),
         ]
     if "port" in g:
         return [CommandSpec("nmap", ["-p-", "--min-rate", "1000", "--open", host],
@@ -262,7 +277,7 @@ def _phase_satisfied(goal: str, specs: List[CommandSpec]) -> bool:
     if "service" in g:
         return "-sV" in joined
     if "web" in g:
-        return any(s.binary in ("httpx", "whatweb") for s in specs) or "http-title" in joined
+        return any(s.binary in ("httpx", "whatweb", "katana") for s in specs) or "http-title" in joined
     if "discovery" in g or "sweep" in g:
         return "-sn" in joined
     if "port" in g:
@@ -299,7 +314,7 @@ _PLAN_SCHEMA = (
 _DECOMPOSE_SCHEMA = (
     'Return JSON only: {"commands": [{"binary": str, "args": [str], '
     '"targets": [str], "rationale": str}]}. '
-    "binary must be one of: nmap, httpx, whatweb, dig, whois, nuclei. "
+    "binary must be one of: nmap, httpx, whatweb, dig, whois, katana, nuclei. "
     "Use nuclei only for vulnerability-scan objectives, e.g. args "
     '["-u", "http://<ip>", "-tags", "exposure,misconfig,cve", "-rl", "10"]. '
     "Only use targets from the authorized scope."

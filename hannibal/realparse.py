@@ -14,8 +14,10 @@ scanner and flagged per-field.
 from __future__ import annotations
 
 import json
+import re
 import xml.etree.ElementTree as ET
 from typing import List
+from urllib.parse import urlsplit
 
 from .types import Finding
 from .injection import scan
@@ -145,4 +147,34 @@ def parse_nuclei_jsonl(output: str, task_id: int, host: str) -> List[Finding]:
         "note", f"vulnscan:{host}",
         f"attack phase complete on {host} — {n} issue(s) detected",
         {"phase": "vulnscan", "status": "done", "issues": n}, task_id, host))
+    return findings
+
+
+def parse_katana(output: str, task_id: int, host: str) -> List[Finding]:
+    """katana output (one URL per line) -> endpoint findings + a crawl note.
+
+    Each URL is a discovered endpoint; it is flagged `parameterized` when it
+    carries a query string or a numeric path segment (…/42), since those are the
+    object references an access-control test would probe. URLs are target-
+    derived content, so each is injection-scanned.
+    """
+    findings: List[Finding] = []
+    seen = set()
+    for line in output.splitlines():
+        line = line.strip()
+        if not line.startswith(("http://", "https://")) or line in seen:
+            continue
+        seen.add(line)
+        path = urlsplit(line).path
+        parameterized = "?" in line or bool(re.search(r"/\d+(?:/|$)", path))
+        findings.append(Finding(
+            "endpoint", line, "parameterized" if parameterized else "endpoint",
+            {"url": line, "parameterized": parameterized}, task_id, host,
+            suspicious=scan(line).suspicious))
+    params = sum(1 for f in findings if f.data.get("parameterized"))
+    findings.append(Finding(
+        "note", f"crawl:{host}",
+        f"crawl complete on {host} — {len(findings)} endpoint(s), {params} parameterized",
+        {"phase": "crawl", "status": "done", "endpoints": len(findings),
+         "parameterized": params}, task_id, host))
     return findings

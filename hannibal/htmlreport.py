@@ -123,6 +123,8 @@ def build_html(workdir: str) -> str:
     suspicious_n = sum(1 for f in findings if f.suspicious)
     mermaid = to_mermaid(findings)
     vulns = [f for f in findings if f.kind == "vuln"]
+    endpoints = [f for f in findings if f.kind == "endpoint"]
+    ep_param = sum(1 for f in endpoints if (f.data or {}).get("parameterized"))
 
     # attack-surface analysis (read-only, advisory)
     from .analysis import analyze, summarize, remediation_for_vuln
@@ -328,7 +330,7 @@ def build_html(workdir: str) -> str:
     <div><div class="k">Methodology</div><span class="ink">Automated recon → attack → validation</span></div>
     <div><div class="k">Issues identified</div><span class="ink">{len(vulns)} vulnerabilit{"y" if len(vulns)==1 else "ies"} · {len(weaknesses)} advisory lead(s)</span></div>
     <div><div class="k">Evidence integrity</div>{audit_badge} {rt}</div>
-    <div><div class="k">Classification</div><span class="ink">Confidential — authorized testing only</span></div>
+    <div><div class="k">Endpoints crawled</div><span class="ink">{len(endpoints)} ({ep_param} parameterized)</span></div>
   </div>
 
   <h2>Executive summary</h2>
