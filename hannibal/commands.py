@@ -22,6 +22,11 @@ from .types import CommandSpec
 # characters that must never appear in an argument (defence in depth; we never
 # use a shell, but this blocks obviously malformed / injected args early)
 _FORBIDDEN = re.compile(r"[;&|`$><\n\r]")
+# URL target values legitimately contain '&' (multi-param query strings). Since
+# commands run with shell=False, '&' in an argument is inert — not a shell
+# operator. So target URLs allow '&' but still reject shell metacharacters,
+# redirection, backticks, and any whitespace (which a real URL never contains).
+_FORBIDDEN_URL = re.compile(r"[;|`$><\s]")
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +254,9 @@ def parse_args(binary: str, args: List[str]) -> Tuple[List[str], Optional[str]]:
                     return [], f"flag {a!r} needs a value"
                 i += 1
                 val = args[i]
-                if _FORBIDDEN.search(val):
+                # a URL target may contain '&'; any other value keeps the strict set
+                forbidden = _FORBIDDEN_URL if a in g.target_value_flags else _FORBIDDEN
+                if forbidden.search(val):
                     return [], f"forbidden character in argument {val!r}"
                 if a in g.value_flags:
                     err = g.value_flags[a](val)

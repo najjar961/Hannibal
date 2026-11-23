@@ -1436,5 +1436,36 @@ class TestAttackTimeout(unittest.TestCase):
         self.assertEqual(findings, [])
 
 
+class TestUrlTargetChars(unittest.TestCase):
+    """Multi-parameter crawled URLs must reach the scanner; shell metachars must not."""
+
+    def _v(self, *targets):
+        args = []
+        for t in targets:
+            args += ["-u", t]
+        return validate(CommandSpec("nuclei", args, list(targets)))
+
+    def test_ampersand_url_allowed(self):
+        # a real query string with two params — legitimate, inert under shell=False
+        self.assertIsNone(self._v("http://10.0.0.1/i.php?page=a&do=b"))
+
+    def test_shell_metachars_in_url_still_blocked(self):
+        for bad in ("http://10.0.0.1/x`id`", "http://10.0.0.1/a b",
+                    "http://10.0.0.1/x>y", "http://10.0.0.1/x|y", "http://10.0.0.1/x;y"):
+            with self.subTest(bad=bad):
+                self.assertIsNotNone(self._v(bad))
+
+    def test_ampersand_in_nonurl_value_still_blocked(self):
+        # the relaxation is only for URL targets, not arbitrary flag values
+        self.assertIsNotNone(validate(CommandSpec(
+            "nuclei", ["-u", "http://10.0.0.1", "-tags", "a&b"], ["http://10.0.0.1"])))
+
+    def test_offhost_multiparam_url_blocked(self):
+        from hannibal.scope import ScopeGuard
+        g = ScopeGuard(["10.0.0.1"])
+        d = g.check([], ["-u", "http://8.8.8.8/x?a=1&b=2"], binary="nuclei")
+        self.assertFalse(d.allowed)
+
+
 if __name__ == "__main__":
     unittest.main()
