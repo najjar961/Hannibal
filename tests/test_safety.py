@@ -321,10 +321,28 @@ class TestHtmlReport(unittest.TestCase):
                             backend="mock", quiet=True, workdir=d)
             Orchestrator(cfg).run()
             page = build_html(d)
-            self.assertIn("HANNIBAL", page)
+            self.assertIn("Security Assessment Report", page)
+            self.assertIn("Executive summary", page)
             self.assertIn("mermaid", page)
             self.assertIn("audit intact", page)       # audit chain verified
             self.assertIn("quarantined", page)         # the injected web finding
+            self.assertIn("exec__rating", page)        # executive summary present
+            self.assertIn("Recon inventory", page)     # recon split from vulns
+
+    def test_report_has_vuln_section_with_status(self):
+        import tempfile
+        from hannibal.config import RunConfig
+        from hannibal.orchestrator import Orchestrator
+        from hannibal.htmlreport import build_html
+        with tempfile.TemporaryDirectory() as d:
+            # attack tier on so the lab's planted vulns appear and get validated
+            Orchestrator(RunConfig(objective="map and attack", backend="mock",
+                                   quiet=True, workdir=d, max_auto_tier=2,
+                                   scope=["10.10.10.0/24", "10.10.11.0/24"])).run()
+            page = build_html(d)
+            self.assertIn("Vulnerabilities", page)
+            self.assertIn("confirmed", page)           # validated status chip
+            self.assertIn("needs review", page)        # the held injection-tainted one
 
 
 class TestFindingsProvenance(unittest.TestCase):
