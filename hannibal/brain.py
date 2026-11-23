@@ -160,14 +160,16 @@ def _web_urls(findings: List[Finding], host: str) -> List[str]:
 # high-value paths a quick web sweep should always check — vulnerable practice
 # apps, admin panels, and commonly-exposed files. Hannibal appends these to each
 # web base so the attack phase reaches the apps, not just the server root.
+# A short, high-signal set of sensitive files/panels to check in addition to
+# the endpoints katana actually discovers. Kept small on purpose: blasting a
+# long guess-list at every web port makes the scan time out against real hosts
+# (and loses findings). Real app paths come from the crawl, not from guessing.
 _COMMON_WEB_PATHS = [
-    "/", "/dvwa/", "/mutillidae/", "/phpMyAdmin/", "/phpmyadmin/",
-    "/tikiwiki/", "/twiki/", "/test/", "/info.php", "/phpinfo.php",
-    "/.git/config", "/.env", "/server-status", "/manager/html", "/admin/",
+    "/", "/.git/config", "/.env", "/server-status", "/phpinfo.php", "/admin/",
 ]
 
 
-def _attack_urls(findings: List[Finding], host: str, max_urls: int = 60) -> List[str]:
+def _attack_urls(findings: List[Finding], host: str, max_urls: int = 25) -> List[str]:
     """Web bases on `host` expanded with common app/admin paths (capped).
 
     This is the lightweight path-discovery step: instead of scanning only the

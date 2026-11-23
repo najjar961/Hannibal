@@ -32,13 +32,19 @@ def parse(spec: CommandSpec, output: str, task_id: int) -> List[Finding]:
         host = urlsplit(t).hostname or t if "://" in t else t
         return realparse.parse_katana(output, task_id, host), sr
     if spec.binary == "nuclei":
-        # tool output we couldn't get (not installed / timeout) is not a
-        # completed phase — return nothing so the planner can retry or give up
-        if output.startswith(("[skipped]", "[timeout]", "[error]")):
-            return [], sr
         from urllib.parse import urlsplit
         url = next((t for t in spec.targets if "://" in t), "")
         host = urlsplit(url).hostname or (spec.targets or ["target"])[0]
+        # the tool isn't installed -> the phase genuinely didn't run; let the
+        # planner decide. A timeout/error DID run (just incomplete): mark the
+        # phase done with an incomplete note so it isn't re-queued forever.
+        if output.startswith("[skipped]"):
+            return [], sr
+        if output.startswith(("[timeout]", "[error]")):
+            return [Finding("note", f"vulnscan:{host}",
+                            f"attack phase on {host} incomplete — {output[:40]}",
+                            {"phase": "vulnscan", "status": "incomplete",
+                             "issues": 0}, task_id, host)], sr
         return realparse.parse_nuclei_jsonl(output, task_id, host), sr
     if realparse.looks_like_nmap_xml(output):
         return realparse.parse_nmap_xml(output, task_id), sr

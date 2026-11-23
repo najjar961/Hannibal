@@ -1220,9 +1220,10 @@ class TestWebPathDiscovery(unittest.TestCase):
     def test_expands_bases_with_app_paths(self):
         from hannibal.brain import _attack_urls
         urls = _attack_urls([self._svc("h", 80, "http")], "h")
-        self.assertIn("h/dvwa/", " ".join(urls))          # reaches a vulnerable app
+        self.assertIn("h/.git/config", " ".join(urls))    # checks a sensitive file
         self.assertIn("http://h/", urls)                  # still scans the root
         self.assertTrue(all(u.startswith("http://h") for u in urls))  # stays on host
+        self.assertLessEqual(len(urls), 25)               # small, so scans don't time out
 
     def test_capped(self):
         from hannibal.brain import _attack_urls
@@ -1408,6 +1409,31 @@ class TestAccessControl(unittest.TestCase):
             events = [json.loads(l)["event"] for l in
                       open(os.path.join(d, "audit.log"), encoding="utf-8") if l.strip()]
             self.assertIn("access_control_held", events)
+
+
+class TestAttackTimeout(unittest.TestCase):
+    """A heavy scan must not silently lose findings or loop forever."""
+
+    def test_attack_url_count_is_bounded(self):
+        from hannibal.brain import _attack_urls
+        f = [Finding("service", f"h:{p}", "http", {"port": p, "service": "http"},
+                     parent_target="h") for p in (80, 443, 8080, 8180, 8000, 8888)]
+        self.assertLessEqual(len(_attack_urls(f, "h")), 25)
+
+    def test_timeout_resolves_phase(self):
+        from hannibal.parse import parse
+        spec = CommandSpec("nuclei", ["-u", "http://10.0.0.1"], ["http://10.0.0.1"])
+        findings, _ = parse(spec, "[timeout] after 180s", 1)
+        notes = [f for f in findings if f.kind == "note"]
+        self.assertTrue(notes)
+        self.assertEqual(notes[0].data["phase"], "vulnscan")
+        self.assertEqual(notes[0].data["status"], "incomplete")
+
+    def test_not_installed_does_not_fake_a_phase(self):
+        from hannibal.parse import parse
+        spec = CommandSpec("nuclei", ["-u", "http://10.0.0.1"], ["http://10.0.0.1"])
+        findings, _ = parse(spec, "[skipped] nuclei not installed", 1)
+        self.assertEqual(findings, [])
 
 
 if __name__ == "__main__":
