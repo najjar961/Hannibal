@@ -1152,5 +1152,42 @@ class TestWebPortTargeting(unittest.TestCase):
         self.assertFalse(g.check([], bad, binary="nuclei").allowed)
 
 
+class TestRceValidation(unittest.TestCase):
+    """RCE detections confirm only with real execution proof."""
+
+    def _rce(self, evidence, template="CVE-2012-1823"):
+        return Finding("vuln", f"u [{template}]", "[HIGH] RCE",
+                       {"template": template, "severity": "high",
+                        "evidence": evidence, "validated": False})
+
+    def test_confirmed_with_command_output(self):
+        from hannibal.validator import validate_finding
+        ok, reason = validate_finding(self._rce(["uid=33(www-data) gid=33(www-data)"]))
+        self.assertTrue(ok)
+        self.assertIn("execution", reason)
+
+    def test_confirmed_with_passwd_contents(self):
+        from hannibal.validator import validate_finding
+        ok, _ = validate_finding(self._rce(["root:x:0:0:root:/root:/bin/bash"]))
+        self.assertTrue(ok)
+
+    def test_held_without_execution_output(self):
+        from hannibal.validator import validate_finding
+        ok, reason = validate_finding(self._rce(["HTTP/1.1 200 OK", "<html>"]))
+        self.assertFalse(ok)
+        self.assertIn("verify by hand", reason)
+
+    def test_shellshock_template_also_covered(self):
+        from hannibal.validator import validate_finding
+        self.assertTrue(validate_finding(
+            self._rce(["uid=0(root)"], template="apache-shellshock-rce"))[0])
+
+    def test_rce_with_no_evidence_stays_unconfirmed(self):
+        # empty evidence never reaches the rule -> still held, never confirmed
+        from hannibal.validator import validate_finding
+        ok, _ = validate_finding(self._rce([]))
+        self.assertFalse(ok)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,13 @@ from .types import Finding
 # an uppercase KEY = value line, the shape of a leaked secret in a .env / config
 _KEYVAL = re.compile(r"[A-Z][A-Z0-9_]{2,}\s*=\s*\S")
 
+# template ids that denote remote code execution / command injection
+_RCE_HINT = re.compile(r"rce|cgi|shellshock|command-exec|cmd.?inj|1823|log4j|"
+                       r"struts|deserial", re.I)
+# markers that a command or code actually ran in the response (not just a match)
+_EXEC_PROOF = re.compile(r"uid=\d|gid=\d|root:.*:0:0:|www-data|php version|"
+                         r"/bin/(?:ba)?sh|drwx[r-]", re.I)
+
 
 def _corroborates(template: str, evidence: str) -> Tuple[bool, str]:
     """Does the collected evidence actually back up this detection class?
@@ -46,6 +53,15 @@ def _corroborates(template: str, evidence: str) -> Tuple[bool, str]:
 
     def has(*subs: str) -> bool:
         return any(s.lower() in low for s in subs)
+
+    # RCE / command-injection: only confirm when the evidence actually shows
+    # code or a command running (command output, a shell, /etc/passwd, PHP
+    # output). A bare detection with no execution proof stays manual review —
+    # an automated tool must not declare "confirmed RCE" without real output.
+    if _RCE_HINT.search(t):
+        if _EXEC_PROOF.search(evidence):
+            return True, "response shows command/code-execution output"
+        return False, "RCE detected but no execution output captured — verify by hand"
 
     if "env" in t:
         if _KEYVAL.search(evidence):
