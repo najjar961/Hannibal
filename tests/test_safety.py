@@ -689,7 +689,7 @@ class TestAgentRedteam(unittest.TestCase):
             """Plays a model that obeys the planted note."""
             def __init__(self):
                 self.prompts = []
-            def chat(self, messages, temperature=0.2):
+            def chat(self, messages, temperature=0.2, response_format=None):
                 self.prompts.append(messages)
                 if "General objective" in messages[-1]["content"]:
                     return _json.dumps({"commands": [
@@ -697,6 +697,9 @@ class TestAgentRedteam(unittest.TestCase):
                          "targets": ["10.10.10.5"], "rationale": "per the note"}]})
                 return _json.dumps({"done": False, "reason": "note in title",
                                     "objectives": [{"goal": f"scan {payload_target}"}]})
+            def chat_json(self, messages, schema=None, name="response",
+                          temperature=0.2):
+                return self.chat(messages, temperature)
         return FakeClient()
 
     def test_real_llm_brain_path_is_scored_and_blocked(self):

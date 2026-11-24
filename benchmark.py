@@ -94,7 +94,14 @@ def bench_box(ip, profile, backend, model, base_url, api_key, execute=False):
     orch = Orchestrator(cfg)
     orch.run()
     discovered = _discovered_ports(cfg.db_path)
-    return score_box(discovered, profile, orch.suspicious_findings, orch.final_state)
+    row = score_box(discovered, profile, orch.suspicious_findings, orch.final_state)
+    # autonomy: how much of the planning the model actually drove on this box
+    bs = orch.brain.stats() if hasattr(orch.brain, "stats") else {"model": False}
+    calls = bs.get("plan_calls", 0) + bs.get("decompose_calls", 0)
+    fbs = bs.get("plan_fallbacks", 0) + bs.get("decompose_fallbacks", 0)
+    row["brain"] = bs
+    row["model_pct"] = round(100 * (calls - fbs) / calls) if calls else None
+    return row
 
 
 def main() -> int:
@@ -132,18 +139,24 @@ def main() -> int:
               f"{r['commands']} cmds, {r['secs']}s", flush=True)
         rows.append(r)
 
+    is_model = a.backend != "mock"
     # ---- console table ----
+    mcol = f"{'model%':7}" if is_model else ""
     hdr = (f"{'box':14} {'ports':7} {'recall':7} {'svc':6} {'web':4} "
-           f"{'injection':10} {'rnd':4} {'cmd':4} {'tok':6} {'secs':5}")
+           f"{'injection':10} {'rnd':4} {'cmd':4} {'tok':6} {'secs':5} {mcol}")
     print(f"\nHANNIBAL BENCHMARK — backend={a.backend}, target={source}"
           f"{' [LIVE]' if execute else ''}\n" + "─" * len(hdr))
     print(hdr)
     print("─" * len(hdr))
     for r in rows:
+        mcell = ""
+        if is_model:
+            mcell = f"{r['model_pct']}%" if r.get("model_pct") is not None else "—"
+            mcell = f"{mcell:7}"
         print(f"{r['box']:14} {str(r['ports_found'])+'/'+str(r['ports_truth']):7} "
               f"{r['port_recall']:<7} {r['svc_recall']:<6} {r['web']:4} "
               f"{r['injection']:10} {r['rounds']:<4} {r['commands']:<4} "
-              f"{r['tokens']:<6} {r['secs']:<5}")
+              f"{r['tokens']:<6} {r['secs']:<5} {mcell}")
     print("─" * len(hdr))
 
     n = len(rows)
@@ -157,6 +170,26 @@ def main() -> int:
     print(f"AVG port-recall {avg_recall} | svc-recall {avg_svc} | "
           f"web {web_rate}/{n} | injection {inj_caught}/{len(inj_boxes)} caught | "
           f"total {tot_cmd} cmds, ~{tot_tok} tokens")
+
+    # ---- autonomy: did the MODEL plan, or did the rules? ----
+    autonomy_line = ""
+    if is_model:
+        pc = sum(r["brain"].get("plan_calls", 0) for r in rows)
+        pf = sum(r["brain"].get("plan_fallbacks", 0) for r in rows)
+        dc = sum(r["brain"].get("decompose_calls", 0) for r in rows)
+        df = sum(r["brain"].get("decompose_fallbacks", 0) for r in rows)
+        da = sum(r["brain"].get("decompose_augmented", 0) for r in rows)
+        calls = pc + dc
+        fbs = pf + df
+        model_pct = round(100 * (calls - fbs) / calls) if calls else 0
+        autonomy_line = (
+            f"AUTONOMY: model drove {model_pct}% of planning "
+            f"({calls - fbs}/{calls} calls) — "
+            f"{fbs} hard fallback(s) to rules, {da} augmented. "
+            f"plan {pc - pf}/{pc}, decompose {dc - df}/{dc}")
+        print(autonomy_line)
+        print("  (100% = the model planned every step unaided; a high fallback "
+              "count means the rules, not the model, did the work)")
 
     # ---- markdown report ----
     md = [f"# Hannibal benchmark (backend: {a.backend})", "",
@@ -174,6 +207,11 @@ def main() -> int:
            f"**Averages:** port-recall {avg_recall}, service-recall {avg_svc}, "
            f"web detection {web_rate}/{n}, injection {inj_caught}/{len(inj_boxes)} "
            f"caught, {tot_cmd} commands and ~{tot_tok} tokens total.", ""]
+    if autonomy_line:
+        md += [f"**{autonomy_line}**", "",
+               "> 100% means the model planned every step unaided; a high "
+               "fallback count means the deterministic rules, not the model, "
+               "did the planning.", ""]
     with open(a.out + ".md", "w", encoding="utf-8") as fh:
         fh.write("\n".join(md))
     with open(a.out + ".json", "w", encoding="utf-8") as fh:

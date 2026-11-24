@@ -141,8 +141,9 @@ class RecordingClient(LLMClient):
         super().__init__(*a, **kw)
         self.transcript: List[str] = []
 
-    def chat(self, messages, temperature: float = 0.2) -> str:
-        out = super().chat(messages, temperature)
+    def chat(self, messages, temperature: float = 0.2,
+             response_format=None) -> str:
+        out = super().chat(messages, temperature, response_format)
         self.transcript.append(out)
         return out
 

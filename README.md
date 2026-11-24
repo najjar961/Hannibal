@@ -193,7 +193,22 @@ python3 hannibal.py run -o "enumerate the box" -s 10.10.11.20 \
     --backend ollama --model qwen3:8b --execute
 ```
 
-If the model returns malformed JSON, the brain falls back to deterministic rules rather than failing the run.
+**Constrained decoding.** The plan and decompose calls are *schema-constrained*:
+the brain asks the server to emit JSON matching a fixed schema (OpenAI-style
+`response_format`), so a small local model can't drift into prose or drop a
+required field — the `binary` is even pinned to the allowlist at decode time.
+Servers vary in what they support, so the client steps down a ladder
+(`json_schema` → `json_object` → unconstrained) and the tolerant parser is the
+final net. This matters because it means a benchmark measures the model's
+*judgement*, not its JSON hygiene. If output is still unusable, the brain falls
+back to deterministic rules rather than failing the run — and that fallback is
+now **counted** (see *Proving autonomy* below).
+
+For the planning model itself: a capable instruct model is what makes the
+autonomy real. A strong local instruct tune (e.g. a Qwen3-class 8B that fits an
+8 GB card) works for offline use; for the benchmark/proof runs, an
+OpenAI-compatible API model such as **DeepSeek** is cheap and reliably plans —
+`--backend openai --base-url https://api.deepseek.com --model deepseek-chat`.
 
 **Coverage guard.** On the first live run, a local model found the hosts, declared "all objectives met", and stopped — before scanning a single port. The *tool* worked; the model's judgement was the weak link. So the Commander's "done" is now backstopped: the orchestrator overrides a premature stop until the standard recon depth (hosts → ports → services → web) is actually reached. A strong model can still do *more* than the floor; it can't do *less*. On real tool output, nmap `-oX` XML and httpx `-json` are parsed into the same structured findings the simulator produces.
 
@@ -551,6 +566,32 @@ The harness is also how bugs get caught: it writes `benchmark_results.md` /
 shows up as a number, not a vibe. Swap the mock backend for a model and the
 same table measures the model's planning quality instead.
 
+### Proving autonomy — did the model plan, or did the rules?
+
+Coverage alone can lie: the deterministic rule-fallback is good enough that a
+run can look autonomous while the *model* contributed almost nothing. So with a
+real backend the benchmark also reports **how much of the planning the model
+actually drove**. Every plan/decompose call is counted, and so is every time the
+brain had to fall back to the rules (model output unusable) or top them up
+(valid output that didn't advance the phase):
+
+```
+box            ports recall svc web injection rnd cmd tok   secs model%
+10.10.11.33    4/4   1.0    1.0 ✓   caught    6   9   4339  0.07 91%
+10.10.10.9     2/2   1.0    1.0 ✓   —         4   4   2339  0.03 86%
+AVG port-recall 1.0 | svc-recall 1.0 | web 5/5 | injection 2/2 caught
+AUTONOMY: model drove 89% of planning (42/47 calls) — 5 hard fallback(s) to
+          rules, 11 augmented. plan 26/26, decompose 16/21
+```
+
+`model%` is the honest autonomy number: 100% means the model planned every step
+unaided; a high fallback count means the rules, not the model, did the work. A
+strong model should push `model%` toward 100 *and* keep coverage at 1.0 — that
+pairing is the claim "it plans autonomously," turned into two numbers you can
+re-run. This is what makes a weak-vs-strong model comparison meaningful instead
+of anecdotal, and it's why constrained decoding matters: it keeps a parse
+failure from masquerading as a planning failure.
+
 ### Real boxes (HTB / TryHackMe)
 
 The sim lab proves the *pipeline* deterministically; to prove it against real
@@ -644,6 +685,8 @@ tests/test_safety.py   control tests
 - [x] Per-tool output parsers for real `nmap -oX`, `httpx -json`
 - [x] Red-team the injection layer with a payload corpus and measure catch + false-positive rate
 - [x] Coverage guard so a weak model can't stop before full recon depth
+- [x] Constrained decoding: schema-constrained plan/decompose output (json_schema → json_object → unconstrained ladder) so a weak model can't emit malformed JSON; the benchmark measures judgement, not JSON hygiene
+- [x] Autonomy metric: the benchmark reports how much of the planning the model drove vs the rule-fallback (`model%` + per-run fallback/augment counts) — turns "it plans autonomously" into a re-runnable number
 - [x] Deobfuscation layer (base64 / homoglyph / spacing / rot13) to beat mechanical evasion
 - [x] Semantic (model-based) second stage for paraphrase / multilingual evasion the patterns can't reach
 - [x] HMAC-signed audit log (tamper-proof, not just tamper-evident)

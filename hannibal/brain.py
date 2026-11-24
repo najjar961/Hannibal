@@ -303,6 +303,12 @@ class MockBrain:
     def tokens_used(self) -> int:
         return self._tokens
 
+    def stats(self) -> dict:
+        # the mock IS the rules, so there is no model to measure
+        return {"model": False, "plan_calls": 0, "plan_fallbacks": 0,
+                "decompose_calls": 0, "decompose_fallbacks": 0,
+                "decompose_augmented": 0}
+
 
 # ---------------------------------------------------------------------------
 # Real model brain.
@@ -321,6 +327,51 @@ _DECOMPOSE_SCHEMA = (
     '["-u", "http://<ip>", "-tags", "exposure,misconfig,cve", "-rl", "10"]. '
     "Only use targets from the authorized scope."
 )
+
+# Machine-readable schemas for constrained decoding (see llm.chat_json). These
+# mirror the prose schemas above, but let a server grammar-constrain the output
+# so a weak model can't emit malformed JSON or a missing field. The `binary`
+# enum pins the tool to the allowlist at decode time.
+_PLAN_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "done": {"type": "boolean"},
+        "reason": {"type": "string"},
+        "objectives": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string"},
+                    "rationale": {"type": "string"},
+                },
+                "required": ["goal"],
+            },
+        },
+    },
+    "required": ["done", "reason", "objectives"],
+}
+_DECOMPOSE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "commands": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "binary": {"type": "string",
+                               "enum": ["nmap", "httpx", "whatweb", "dig",
+                                        "whois", "katana", "nuclei"]},
+                    "args": {"type": "array", "items": {"type": "string"}},
+                    "targets": {"type": "array", "items": {"type": "string"}},
+                    "rationale": {"type": "string"},
+                },
+                "required": ["binary", "args", "targets"],
+            },
+        },
+    },
+    "required": ["commands"],
+}
 
 
 def _findings_block(findings: List[Finding]) -> str:
@@ -347,36 +398,48 @@ class LLMBrain:
         self.client = client
         self.scope = scope
         self._tokens = 0
+        # autonomy counters: how much of the planning the *model* actually did,
+        # vs how often the deterministic rules had to take over. A high fallback
+        # rate means the "autonomy" is really the rules — the number that keeps
+        # a benchmark honest (see benchmark.py).
+        self._n_plan = 0
+        self._n_plan_fb = 0
+        self._n_decompose = 0
+        self._n_decompose_fb = 0       # model output unusable -> full rule fallback
+        self._n_decompose_aug = 0      # model output valid but needed topping up
 
-    def _call(self, task_prompt: str) -> dict:
+    def _call(self, task_prompt: str, schema: dict, name: str) -> dict:
         messages = [
             {"role": "system", "content": SYSTEM_GUARDRAIL +
              f"\nAuthorized scope (the ONLY permitted targets): {self.scope}"},
             {"role": "user", "content": task_prompt},
         ]
         self._tokens += estimate_tokens(task_prompt) + 200
-        raw = self.client.chat(messages)
+        raw = self.client.chat_json(messages, schema=schema, name=name)
         self._tokens += estimate_tokens(raw)
         return _extract_json(raw)
 
     def plan(self, objective: str, findings: List[Finding]) -> Plan:
+        self._n_plan += 1
         prompt = (f"Objective: {objective}\n\nFindings so far:\n"
                   f"{_findings_block(findings)}\n\n{_PLAN_SCHEMA}")
         try:
-            obj = self._call(prompt)
+            obj = self._call(prompt, _PLAN_JSON_SCHEMA, "plan")
             objectives = [GeneralObjective(o["goal"], o.get("rationale", ""))
                           for o in obj.get("objectives", [])]
             return Plan(bool(obj.get("done", False)),
                         str(obj.get("reason", "")), objectives)
         except Exception:
+            self._n_plan_fb += 1
             return rule_plan(objective, findings)  # safe fallback
 
     def decompose(self, goal: str, findings: List[Finding],
                   scope: List[str]) -> List[CommandSpec]:
+        self._n_decompose += 1
         prompt = (f"General objective: {goal}\n\nFindings so far:\n"
                   f"{_findings_block(findings)}\n\n{_DECOMPOSE_SCHEMA}")
         try:
-            obj = self._call(prompt)
+            obj = self._call(prompt, _DECOMPOSE_JSON_SCHEMA, "commands")
             specs = []
             for c in obj.get("commands", []):
                 specs.append(CommandSpec(
@@ -385,17 +448,28 @@ class LLMBrain:
                     str(c.get("rationale", "")),
                 ))
             if not specs:
+                self._n_decompose_fb += 1
                 return rule_decompose(goal, findings, scope)
             # rules as a floor: if the model's commands don't actually advance
             # this phase, add the standard ones for it (keeping the model's extras)
             if not _phase_satisfied(goal, specs):
+                self._n_decompose_aug += 1
                 have = {s.as_cmdline() for s in specs}
                 for rc in rule_decompose(goal, findings, scope):
                     if rc.as_cmdline() not in have:
                         specs.append(rc)
             return specs
         except Exception:
+            self._n_decompose_fb += 1
             return rule_decompose(goal, findings, scope)
+
+    def stats(self) -> dict:
+        """Autonomy counters — how much the model drove vs the rule fallback."""
+        return {"model": True,
+                "plan_calls": self._n_plan, "plan_fallbacks": self._n_plan_fb,
+                "decompose_calls": self._n_decompose,
+                "decompose_fallbacks": self._n_decompose_fb,
+                "decompose_augmented": self._n_decompose_aug}
 
     def tokens_used(self) -> int:
         return self._tokens
