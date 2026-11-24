@@ -1,0 +1,56 @@
+{
+  "_comment": "Ground truth for Metasploitable 2 (default services). CHANGE the ip to your VM's host-only IP (see setup). Only scan this VM, on an isolated host-only network you control.",
+  "boxes": [
+    {
+      "ip": "192.168.80.129",
+      "name": "Metasploitable2",
+      "ports": {
+        "21": "ftp",
+        "22": "ssh",
+        "23": "telnet",
+        "25": "smtp",
+        "53": "domain",
+        "80": "http",
+        "111": "rpcbind",
+        "139": "netbios-ssn",
+        "445": "microsoft-ds",
+        "512": "exec",
+        "513": "login",
+        "514": "shell",
+        "1099": "java-rmi",
+        "1524": "bindshell",
+        "2049": "nfs",
+        "2121": "ftp",
+        "3306": "mysql",
+        "3632": "distccd",
+        "5432": "postgresql",
+        "5900": "vnc",
+        "6000": "x11",
+        "6667": "irc",
+        "8009": "ajp13",
+        "8180": "http"
+      },
+      "versions": {
+        "21": "vsftpd 2.3.4",
+        "22": "OpenSSH 4.7p1 Debian 8ubuntu1",
+        "23": "Linux telnetd",
+        "25": "Postfix smtpd",
+        "53": "ISC BIND 9.4.2",
+        "80": "Apache httpd 2.2.8",
+        "139": "Samba smbd 3.0.20-Debian",
+        "445": "Samba smbd 3.0.20-Debian",
+        "1099": "GNU Classpath grmiregistry",
+        "2121": "ProFTPD 1.3.1",
+        "3306": "MySQL 5.0.51a-3ubuntu5",
+        "3632": "distccd v1",
+        "5432": "PostgreSQL DB 8.3.0 - 8.3.7",
+        "5900": "VNC protocol 3.3",
+        "6667": "UnrealIRCd",
+        "8180": "Apache Tomcat/Coyote JSP engine 1.1"
+      },
+      "web_title": "",
+      "web_tech": "Apache,PHP",
+      "injection": false
+    }
+  ]
+}

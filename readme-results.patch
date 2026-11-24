@@ -1,0 +1,73 @@
+From 4152bfccd56d4586df1367bf4059fe7cdf045a94 Mon Sep 17 00:00:00 2001
+From: najjar961 <najjar961@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 17:50:40 +0100
+Subject: [PATCH] README: add real-world Metasploitable 2 results section
+
+Documents the live-host run: 24/24 port recall, 96% service recall, 14 advisory
+CVE leads (5 critical incl. vsftpd/UnrealIRCd backdoors and distccd RCE), and a
+real CVE-2012-1823 PHP-CGI RCE found by the attack phase across web ports. Notes
+the validator's conservative RCE handling and the authorization boundary.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_015d2ir5DDW9KgaYjTnk6zd8
+---
+ README.md | 43 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 43 insertions(+)
+
+diff --git a/README.md b/README.md
+index f0fd468..9a39162 100644
+--- a/README.md
++++ b/README.md
+@@ -66,6 +66,49 @@ graph TD
+ 
+ ---
+ 
++## Real-world run — Metasploitable 2
++
++Beyond the deterministic sim, Hannibal has been run end-to-end against a live
++[Metasploitable 2](https://docs.rapid7.com/metasploit/metasploitable-2/) host on
++an isolated host-only network. One command, no human in the loop for recon:
++
++```bash
++hannibal run -o "map and attack metasploitable" -s <host> --execute --max-auto-tier 2
++```
++
++**Recon** (scored by `benchmark.py --targets`): **24/24 ports found (100% recall)**,
++**96% service-version recall**, web surface detected — fully autonomous, the
++Commander planning the whole host-discovery → port → service → web chain itself.
++
++**Known-weakness check** flagged **14 advisory leads, 5 critical**, straight from
++the real service banners:
++
++```
++CRITICAL  :21    vsftpd 2.3.4 backdoor                 [CVE-2011-2523]
++CRITICAL  :1524  Metasploitable bind shell
++CRITICAL  :3632  distccd remote command execution      [CVE-2004-2687]
++CRITICAL  :6667  UnrealIRCd backdoor                   [CVE-2010-2075]
++CRITICAL  :6697  UnrealIRCd backdoor                   [CVE-2010-2075]
++HIGH      :23    Cleartext Telnet exposed
++```
++
++**Attack phase** ran `nuclei` across every discovered web port (80 and Tomcat on
++8180) and found a real remote-code-execution flaw:
++
++```
++[HIGH] PHP CGI RCE — CVE-2012-1823 — http://<host>/index.php?-d+allow_url_include%3don...
++```
++
++The validator holds an RCE for manual review unless the response evidence shows
++code actually executing — so the tool never auto-declares a confirmed RCE from a
++bare detection. Every step is in the hash-chained audit log
++(`hannibal verify-audit`).
++
++All leads are advisory and were verified against a host built to be vulnerable;
++nothing here is run against systems without authorization.
++
++---
++
+ ## Install
+ 
+ No dependencies — Python 3.10+ standard library only. Clone and go, or install the
+-- 
+2.43.0
+

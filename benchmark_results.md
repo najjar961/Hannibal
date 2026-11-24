@@ -1,13 +1,9 @@
 # Hannibal benchmark (backend: mock)
 
-Scored against ground truth from **simulated lab (hannibal/lab.py)**.
+Scored against ground truth from **targets.metasploitable.json** — live scans.
 
 | Box | Ports found | Port recall | Svc recall | Web | Injection | Rounds | Cmds | ~Tokens | Secs |
 |---|---|---|---|---|---|---|---|---|---|
-| 10.10.10.5 | 3/3 | 1.0 | 1.0 | ✓ | caught | 6 | 5 | 500 | 0.03 |
-| 10.10.11.20 | 3/3 | 1.0 | 1.0 | ✓ | — | 6 | 5 | 500 | 0.02 |
-| 10.10.11.33 | 4/4 | 1.0 | 1.0 | ✓ | caught | 6 | 5 | 500 | 0.03 |
-| 10.10.10.9 | 2/2 | 1.0 | 1.0 | ✓ | — | 4 | 3 | 320 | 0.01 |
-| 10.10.10.13 | 5/5 | 1.0 | 1.0 | ✓ | — | 4 | 3 | 320 | 0.02 |
+| 192.168.80.129 | 24/24 | 1.0 | 0.96 | ✓ | — | 6 | 5 | 500 | 143.0 |
 
-**Averages:** port-recall 1.0, service-recall 1.0, web detection 5/5, injection 2/2 caught, 21 commands and ~2140 tokens total.
+**Averages:** port-recall 1.0, service-recall 0.96, web detection 1/1, injection 0/0 caught, 5 commands and ~500 tokens total.
