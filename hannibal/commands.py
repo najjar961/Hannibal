@@ -11,6 +11,7 @@ demoed and benchmarked with zero setup and zero network traffic.
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -18,6 +19,13 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from .types import CommandSpec
+
+# Tools that speak HTTP(S) and honour the HTTP_PROXY / HTTPS_PROXY environment
+# variables. When a scope proxy is active these are routed through it, so their
+# runtime traffic (redirects, resolved hosts) is scope-checked on the wire — a
+# backstop below the static scope guard. The raw-socket tools (nmap, dig,
+# whois) do not speak HTTP; their runtime backstop is container egress.
+_HTTP_PROXY_TOOLS = {"httpx", "nuclei", "katana", "whatweb"}
 
 # characters that must never appear in an argument (defence in depth; we never
 # use a shell, but this blocks obviously malformed / injected args early)
@@ -398,8 +406,32 @@ def _with_structured_output(spec: CommandSpec) -> List[str]:
     return args
 
 
-def run(spec: CommandSpec, execute: bool, timeout: int) -> str:
-    """Run (or simulate) an already scope-approved, validated command."""
+def _proxy_env(binary: str, proxy_addr: Optional[str]) -> Optional[Dict[str, str]]:
+    """The process environment for a command, or None to inherit unchanged.
+
+    When a scope proxy is active and the tool speaks HTTP, point it at the
+    proxy via the standard proxy variables (both cases, since tools differ) and
+    clear NO_PROXY so nothing bypasses it. The allowlist grammar is untouched —
+    no proxy *flag* is added to any command, so this opens no new argument
+    surface. Isolated here so it can be unit-tested without spawning a process.
+    """
+    if not proxy_addr or binary not in _HTTP_PROXY_TOOLS:
+        return None
+    env = os.environ.copy()
+    for var in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        env[var] = proxy_addr
+    env["NO_PROXY"] = env["no_proxy"] = ""
+    return env
+
+
+def run(spec: CommandSpec, execute: bool, timeout: int,
+        proxy_addr: Optional[str] = None) -> str:
+    """Run (or simulate) an already scope-approved, validated command.
+
+    `proxy_addr`, when given, routes HTTP-speaking tools through the scope proxy
+    so their on-the-wire destinations are enforced at runtime too. It never
+    changes the argument vector — only the child process environment.
+    """
     if not execute:
         return _simulate(spec)
     if shutil.which(spec.binary) is None:
@@ -408,6 +440,7 @@ def run(spec: CommandSpec, execute: bool, timeout: int) -> str:
         proc = subprocess.run(
             [spec.binary, *_with_structured_output(spec)],
             capture_output=True, text=True, timeout=timeout, shell=False,
+            env=_proxy_env(spec.binary, proxy_addr),
         )
         out = (proc.stdout or "") + (proc.stderr or "")
         return out.strip() or f"[no output] exit={proc.returncode}"

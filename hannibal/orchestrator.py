@@ -31,6 +31,8 @@ from .validator import validate_findings, validation_counts
 from .analysis import analyze, summarize
 from .llm import LLMClient
 from .semantic import LLMJudge
+from .injection import scan
+from .proxy import ScopeProxy
 from . import commands as cmd
 from .parse import parse
 
@@ -63,6 +65,7 @@ class Orchestrator:
         self.judge = self._build_judge()
         self._print_lock = threading.Lock()
         self.stopped_reason = ""
+        self.proxy = None                 # runtime scope proxy (execute+proxy only)
         self.validated_counts = (0, 0)    # (confirmed, total) vuln findings
         self.weaknesses: list = []        # known-weakness leads (advisory)
         self._phase_attempts: dict = {}   # objective goal -> times issued
@@ -172,7 +175,9 @@ class Orchestrator:
         # 5. execute (or simulate)
         self.audit.record("command_exec", task=task.id, cmd=spec.as_cmdline(),
                           mode="execute" if self.cfg.execute else "dry-run")
-        output = cmd.run(spec, self.cfg.execute, self.cfg.command_timeout)
+        proxy_addr = self.proxy.address if self.proxy is not None else None
+        output = cmd.run(spec, self.cfg.execute, self.cfg.command_timeout,
+                         proxy_addr=proxy_addr)
         self.store.finish_task(task.id, "done", output)
 
         # 6. parse -> findings (+ injection scan on untrusted output)
@@ -207,6 +212,21 @@ class Orchestrator:
         self.audit.record("run_start", objective=cfg.objective, scope=cfg.scope,
                           backend=cfg.backend, execute=cfg.execute)
         self._log(f"\n⚔  HANNIBAL — {cfg.summary()}\n" + "─" * 60)
+
+        # runtime egress backstop: route HTTP tools through a scope proxy so the
+        # destinations they actually reach (after redirects / DNS) are enforced
+        # on the wire, below the static guard. Only meaningful with real traffic.
+        if cfg.proxy and cfg.execute:
+            self.proxy = ScopeProxy(
+                self.scope.why_out_of_scope,
+                scan=lambda body: scan(body).suspicious,
+                on_block=lambda host, reason, kind: self.audit.record(
+                    "proxy_blocked", host=host, reason=reason, kind=kind,
+                    control="proxy"),
+            ).start()
+            self.audit.record("proxy_start", address=self.proxy.address)
+            self._log(f"  ⛨ scope proxy on {self.proxy.address} — "
+                      f"runtime egress backstop active")
 
         while True:
             stop = self.budget.check()
@@ -319,6 +339,14 @@ class Orchestrator:
         all_f = self.store.all_findings()
         vulns = [f for f in all_f if f.kind == "vuln"]
         if vulns:
+            # if the scope proxy captured the real response bodies, corroborate
+            # each detection against what the tool actually received, not just
+            # the scanner's extracted snippet. Attacker-controlled, so a body
+            # that trips the injection scan marks the finding suspicious — which
+            # the validator then refuses to auto-confirm.
+            if self.proxy is not None:
+                from .validator import enrich_evidence
+                enrich_evidence(vulns, self.proxy.transcript)
             for f in validate_findings(vulns):
                 self.store.add_finding(f)
                 self.audit.record("validation", target=f.target,
@@ -368,4 +396,15 @@ class Orchestrator:
         self._log(f"graph → {gpath}")
         self._log(f"audit → {os.path.join(self.cfg.workdir, 'audit.log')} "
                   f"(verify with: hannibal verify-audit {self.cfg.workdir})")
+
+        # tear down the runtime proxy and record what it saw
+        if self.proxy is not None:
+            stats = self.proxy.stats()
+            self.audit.record("proxy_summary", **stats)
+            if stats["blocked"]:
+                self._log(f"⛨ scope proxy blocked {stats['blocked']} out-of-scope "
+                          f"request(s) on the wire (see audit: proxy_blocked)")
+            self.proxy.stop()
+            self.proxy = None
+
         self.store.close()

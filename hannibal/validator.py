@@ -125,6 +125,38 @@ def validate_findings(findings: List[Finding]) -> List[Finding]:
     return findings
 
 
+def enrich_evidence(findings: List[Finding], transcript) -> None:
+    """Augment each vuln finding's evidence with the real response body the
+    scope proxy captured for its matched URL, in place.
+
+    A nuclei detection ships only a thin `extracted-results` snippet; the proxy
+    recorded the full response the tool actually received. Corroborating against
+    the real body makes a CONFIRMED verdict mean more. HTTP only — Phase 1 does
+    not capture HTTPS bodies (see proxy.py).
+
+    The body is attacker-controlled: if it tripped the proxy's injection scan,
+    the finding is marked suspicious, and validate_finding then holds it for
+    manual review instead of auto-confirming. `transcript` is duck-typed (any
+    object with `.body_for(url) -> Exchange|None`) so the validator stays
+    decoupled from the proxy module.
+    """
+    for f in findings:
+        if f.kind != "vuln":
+            continue
+        url = str(f.data.get("matched_at") or f.target or "")
+        ex = transcript.body_for(url)
+        if ex is None:
+            continue
+        evidence = list(f.data.get("evidence") or [])
+        snippet = (ex.body or "")[:2000]
+        if snippet and snippet not in evidence:
+            evidence.append(snippet)
+        f.data["evidence"] = evidence
+        f.data["proxy_status"] = ex.status
+        if ex.suspicious:
+            f.suspicious = True
+
+
 def validation_counts(findings: List[Finding]) -> Tuple[int, int]:
     """(confirmed, total) over the `vuln` findings."""
     vulns = [f for f in findings if f.kind == "vuln"]

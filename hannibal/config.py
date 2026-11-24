@@ -40,6 +40,11 @@ class RunConfig:
 
     # safety
     require_scope: bool = True            # refuse to start with an empty scope
+    # runtime egress backstop: route HTTP-speaking tools through an in-process
+    # scope proxy so their on-the-wire destinations are enforced too (catches
+    # redirects / runtime-resolved hosts the static guard can't see). Only has
+    # an effect with --execute (dry-run spawns no real traffic).
+    proxy: bool = False
     # rules of engagement: highest risk tier that runs without a human.
     # 1 = recon only (default). 2 = attack-tier wraiths run on their own —
     # only for your own isolated lab.

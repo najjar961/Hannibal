@@ -27,6 +27,7 @@ An autonomous agent that reads attacker-controlled output (HTTP titles, banners,
 | **Injection quarantine** | Untrusted output is fenced in unspoofable delimiters and scanned for override patterns; flagged findings are marked `suspicious` and can never widen scope. | `injection.py` |
 | **Tamper-evident audit** | Every decision is a hash-chained JSON line; changing one past byte breaks verification of every line after it. Set `HANNIBAL_AUDIT_KEY` and each entry is also HMAC-signed — unforgeable without the key. | `audit.py` |
 | **Budget / kill-switch** | Hard caps on rounds, wall-time, tokens and commands, checked before every round and every command. | `budget.py` |
+| **Runtime egress proxy** | Opt-in (`--proxy`): HTTP tools are routed through an in-process proxy that scope-checks every request and CONNECT *on the wire*, with the **same** guard. It catches destinations the static guard can't see — a redirect, a runtime-resolved host — refuses them at the socket, and records in-scope response bodies so the validator corroborates against what the tool really received. | `proxy.py` |
 
 The scope guard is the hard backstop; the injection scanner is the early detector and audit signal. **Defence in depth** — a hostile target would have to beat both, and even then the allowlist and the audit trail remain.
 
@@ -280,9 +281,54 @@ anything to, a real system.
 
 ---
 
+## Runtime egress backstop — the scope proxy
+
+The scope guard checks a command *before* it runs, reasoning about the targets
+in its argument vector. That is a static check of declared intent, and by
+construction it cannot see where traffic actually goes once a tool is live: an
+HTTP client following a `302` to another host, a hostname that resolves to a
+different address at runtime, an out-of-band callback. None of those appear in
+the argument vector.
+
+`--proxy` adds the second enforcement site, on the network path. HTTP-speaking
+tools (`httpx`, `nuclei`, `katana`) are pointed at an in-process forward proxy
+through the child-process environment only — **no proxy flag is ever added to a
+command**, so the allowlist grammar is untouched. Every request and every
+HTTPS `CONNECT` has its destination checked against the *same*
+`ScopeGuard.why_out_of_scope` the static guard uses — one scope definition, two
+call sites — and anything out of scope is refused at the socket, written to the
+audit log (`proxy_blocked`), and counted.
+
+```bash
+hannibal run -o "map and attack the lab" -s 10.10.11.20 --execute --proxy
+#   ⛨ scope proxy on http://127.0.0.1:52133 — runtime egress backstop active
+#   ⛨ scope proxy blocked 1 out-of-scope request(s) on the wire
+```
+
+It's also an evidence tap: in-scope HTTP responses are recorded, so the
+validator corroborates a detection against the **real body** the tool received,
+not just the scanner's extracted snippet (`validator.enrich_evidence`). Those
+bodies are attacker-controlled, so one that trips the injection scan marks the
+finding suspicious and it can never auto-confirm — the same rule the rest of the
+pipeline already follows.
+
+The proof it buys is a class of attack the static guard is blind to:
+`tests/test_proxy.py` plants an in-scope page that **redirects to an
+out-of-scope host**. The static guard approves the command (its declared target
+*is* in scope); the proxy refuses the followed request on the wire. Two layers,
+two different questions — *what did the model ask for* vs *where did the packet
+go*.
+
+**Honest limits.** Phase 1 is stdlib-only and does **not** intercept TLS: for an
+HTTPS `CONNECT` it enforces the destination host (the scope backstop holds for
+every protocol) but tunnels the encrypted bytes untouched, so body capture is
+HTTP-only. And `nmap` / `dig` / `whois` use raw sockets, not HTTP — their
+runtime backstop is container egress (below), not this proxy. The proxy covers
+the web tools, where runtime redirects and OOB callbacks actually live.
+
 ## Safety model in one paragraph
 
-Hannibal will not run a command whose binary is not on the allowlist, will not run a command that touches a target outside the scope you pass on the command line, will not run an attack-tier command without clearance (`--max-auto-tier` / `--approve`), will not follow instructions found in tool output, and will not exceed the budgets you set. The default mode never spawns a real process at all. `--execute` is opt-in and prints a warning. None of these are suggestions to the model — they are enforced in code on the execution path, and every decision is written to an audit log you can verify.
+Hannibal will not run a command whose binary is not on the allowlist, will not run a command that touches a target outside the scope you pass on the command line, will not run an attack-tier command without clearance (`--max-auto-tier` / `--approve`), will not follow instructions found in tool output, and will not exceed the budgets you set. With `--proxy`, a web tool's traffic that tries to leave scope at runtime — a redirect, a resolved host — is refused on the wire by the same guard, below the command-level check. The default mode never spawns a real process at all. `--execute` is opt-in and prints a warning. None of these are suggestions to the model — they are enforced in code on the execution path, and every decision is written to an audit log you can verify.
 
 ---
 
@@ -618,6 +664,7 @@ hannibal/
   scope.py             scope enforcement
   commands.py          tiered allowlist (recon / attack) + runner + simulator
   injection.py         untrusted-output quarantine + regex scanner + deobfuscation
+  proxy.py             runtime scope-enforcing recording proxy (--proxy)
   semantic.py          second-stage model judge (intent-based injection detection)
   audit.py             hash-chained audit log
   budget.py            kill-switch / budgets
@@ -653,6 +700,7 @@ tests/test_safety.py   control tests
 - [x] Benchmark against real HTB/THM boxes via a JSON ground-truth file (`--targets`)
 - [x] Attack-surface analysis: map discovered services to known weaknesses (advisory) — now runs automatically after every campaign, not just on demand
 - [x] Red-team the scope guard itself; make it deny-by-default with a per-tool argument grammar
+- [x] Runtime egress backstop (`--proxy`): a scope-enforcing recording proxy that checks every HTTP request / CONNECT on the wire with the same guard — catches redirects / runtime-resolved hosts the static guard can't see, and records bodies so the validator corroborates against the real response (stdlib, no TLS interception yet)
 - [x] Agent-level red-team harness: hostile banners → model → guard, scored on *followed* vs *got through* (runs in CI with a scripted hijacked brain)
 - [x] Midrecon box mode so the agent red-team measures real model following (honest next step exists), not passivity
 - [x] Rules of engagement: risk tiers + approval gate (hold / prompt / lab auto-clear)
