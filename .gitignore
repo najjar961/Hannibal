@@ -9,3 +9,6 @@ audit.log
 # agent red-team output from the scripted CI brains (real-model results are kept)
 agent_redteam_mock*
 eval_history.jsonl
+
+# delivered dev patches — not part of the project
+*.patch

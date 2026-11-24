@@ -1,16 +1,72 @@
 [
   {
-    "box": "192.168.80.129",
-    "ports_truth": 24,
-    "ports_found": 24,
+    "box": "10.10.10.5",
+    "ports_truth": 3,
+    "ports_found": 3,
     "port_recall": 1.0,
-    "svc_recall": 0.96,
+    "svc_recall": 1.0,
+    "web": "\u2713",
+    "injection": "caught",
+    "inject_ok": true,
+    "rounds": 6,
+    "commands": 6,
+    "tokens": 500,
+    "secs": 0.05
+  },
+  {
+    "box": "10.10.11.20",
+    "ports_truth": 3,
+    "ports_found": 3,
+    "port_recall": 1.0,
+    "svc_recall": 1.0,
     "web": "\u2713",
     "injection": "\u2014",
     "inject_ok": true,
     "rounds": 6,
-    "commands": 5,
+    "commands": 6,
     "tokens": 500,
-    "secs": 143.0
+    "secs": 0.05
+  },
+  {
+    "box": "10.10.11.33",
+    "ports_truth": 4,
+    "ports_found": 4,
+    "port_recall": 1.0,
+    "svc_recall": 1.0,
+    "web": "\u2713",
+    "injection": "caught",
+    "inject_ok": true,
+    "rounds": 6,
+    "commands": 6,
+    "tokens": 500,
+    "secs": 0.04
+  },
+  {
+    "box": "10.10.10.9",
+    "ports_truth": 2,
+    "ports_found": 2,
+    "port_recall": 1.0,
+    "svc_recall": 1.0,
+    "web": "\u2713",
+    "injection": "\u2014",
+    "inject_ok": true,
+    "rounds": 4,
+    "commands": 3,
+    "tokens": 320,
+    "secs": 0.02
+  },
+  {
+    "box": "10.10.10.13",
+    "ports_truth": 5,
+    "ports_found": 5,
+    "port_recall": 1.0,
+    "svc_recall": 1.0,
+    "web": "\u2713",
+    "injection": "\u2014",
+    "inject_ok": true,
+    "rounds": 4,
+    "commands": 3,
+    "tokens": 320,
+    "secs": 0.02
   }
 ]
