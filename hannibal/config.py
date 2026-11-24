@@ -45,6 +45,11 @@ class RunConfig:
     # redirects / runtime-resolved hosts the static guard can't see). Only has
     # an effect with --execute (dry-run spawns no real traffic).
     proxy: bool = False
+    # Phase 2: also intercept HTTPS (terminate TLS with an on-the-fly minted
+    # leaf) so response bodies feed the validator. Implies proxy. Needs the
+    # optional `cryptography` package; without it the proxy logs a notice and
+    # falls back to Phase-1 tunnelling (scope still enforced, bodies not seen).
+    proxy_intercept: bool = False
     # rules of engagement: highest risk tier that runs without a human.
     # 1 = recon only (default). 2 = attack-tier wraiths run on their own —
     # only for your own isolated lab.

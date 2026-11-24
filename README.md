@@ -27,7 +27,7 @@ An autonomous agent that reads attacker-controlled output (HTTP titles, banners,
 | **Injection quarantine** | Untrusted output is fenced in unspoofable delimiters and scanned for override patterns; flagged findings are marked `suspicious` and can never widen scope. | `injection.py` |
 | **Tamper-evident audit** | Every decision is a hash-chained JSON line; changing one past byte breaks verification of every line after it. Set `HANNIBAL_AUDIT_KEY` and each entry is also HMAC-signed — unforgeable without the key. | `audit.py` |
 | **Budget / kill-switch** | Hard caps on rounds, wall-time, tokens and commands, checked before every round and every command. | `budget.py` |
-| **Runtime egress proxy** | Opt-in (`--proxy`): HTTP tools are routed through an in-process proxy that scope-checks every request and CONNECT *on the wire*, with the **same** guard. It catches destinations the static guard can't see — a redirect, a runtime-resolved host — refuses them at the socket, and records in-scope response bodies so the validator corroborates against what the tool really received. | `proxy.py` |
+| **Runtime egress proxy** | Opt-in (`--proxy`): HTTP tools are routed through an in-process proxy that scope-checks every request and CONNECT *on the wire*, with the **same** guard. It catches destinations the static guard can't see — a redirect, a runtime-resolved host — refuses them at the socket, and records in-scope response bodies so the validator corroborates against what the tool really received. `--proxy-intercept` extends body capture to HTTPS via on-the-fly TLS interception. | `proxy.py`, `tls_intercept.py` |
 
 The scope guard is the hard backstop; the injection scanner is the early detector and audit signal. **Defence in depth** — a hostile target would have to beat both, and even then the allowlist and the audit trail remain.
 
@@ -319,12 +319,42 @@ out-of-scope host**. The static guard approves the command (its declared target
 two different questions — *what did the model ask for* vs *where did the packet
 go*.
 
-**Honest limits.** Phase 1 is stdlib-only and does **not** intercept TLS: for an
-HTTPS `CONNECT` it enforces the destination host (the scope backstop holds for
-every protocol) but tunnels the encrypted bytes untouched, so body capture is
-HTTP-only. And `nmap` / `dig` / `whois` use raw sockets, not HTTP — their
-runtime backstop is container egress (below), not this proxy. The proxy covers
-the web tools, where runtime redirects and OOB callbacks actually live.
+### Phase 2 — HTTPS interception (`--proxy-intercept`)
+
+Phase 1 enforces scope on an HTTPS `CONNECT` by its destination host but tunnels
+the encrypted bytes, so it never sees the body. `--proxy-intercept` adds opt-in
+TLS interception: for an **in-scope** host the proxy terminates the client's TLS
+with a leaf certificate it **mints on the fly** (signed by an ephemeral,
+per-run CA), opens its own TLS connection to the real upstream, and reads the
+decrypted HTTP in between — so HTTPS response bodies feed `validator.enrich_evidence`
+exactly as plain-HTTP ones do.
+
+```bash
+hannibal run -o "map and attack" -s 10.10.11.20 --execute --proxy-intercept
+#   ⛨ scope proxy on http://127.0.0.1:42001 — runtime egress backstop active (TLS-intercepting)
+#      CA → hannibal_run/hannibal-proxy-ca.pem  (PD scanners skip TLS verify; trust this for verifying clients)
+```
+
+Interception never widens scope: the `CONNECT` is scope-checked first, so only an
+already-authorized host is ever intercepted, and the decrypted requests are
+re-checked against the same guard. The CA is generated fresh each run, its key
+never leaves the process, and its certificate is written to the run directory so
+you can inspect or trust it. The ProjectDiscovery scanners don't verify TLS
+against the system store by default, so interception needs no CA install; a
+verifying client can be pointed at that file.
+
+This is the one piece with a dependency: minting X.509 leaf certs needs
+`cryptography` (the core tool and Phase 1 stay stdlib-only). It's an **optional
+extra** — `pip install hannibal[intercept]`, or just `pip install cryptography`.
+Without it, `--proxy-intercept` logs a notice and falls back to Phase-1
+tunnelling; scope is still enforced, HTTPS bodies just aren't captured.
+
+**Honest limits.** Without `--proxy-intercept`, HTTPS body capture is off (scope
+is still enforced on the `CONNECT`). `nmap` / `dig` / `whois` use raw sockets,
+not HTTP — their runtime backstop is container egress (below), not this proxy.
+And interception is a true man-in-the-middle: it works because scanners accept
+any cert, so it is strictly for your own authorized testing, never a tap on
+someone else's traffic.
 
 ## Safety model in one paragraph
 
@@ -665,6 +695,7 @@ hannibal/
   commands.py          tiered allowlist (recon / attack) + runner + simulator
   injection.py         untrusted-output quarantine + regex scanner + deobfuscation
   proxy.py             runtime scope-enforcing recording proxy (--proxy)
+  tls_intercept.py     optional HTTPS interception: ephemeral CA + leaf minting
   semantic.py          second-stage model judge (intent-based injection detection)
   audit.py             hash-chained audit log
   budget.py            kill-switch / budgets
@@ -700,7 +731,8 @@ tests/test_safety.py   control tests
 - [x] Benchmark against real HTB/THM boxes via a JSON ground-truth file (`--targets`)
 - [x] Attack-surface analysis: map discovered services to known weaknesses (advisory) — now runs automatically after every campaign, not just on demand
 - [x] Red-team the scope guard itself; make it deny-by-default with a per-tool argument grammar
-- [x] Runtime egress backstop (`--proxy`): a scope-enforcing recording proxy that checks every HTTP request / CONNECT on the wire with the same guard — catches redirects / runtime-resolved hosts the static guard can't see, and records bodies so the validator corroborates against the real response (stdlib, no TLS interception yet)
+- [x] Runtime egress backstop (`--proxy`): a scope-enforcing recording proxy that checks every HTTP request / CONNECT on the wire with the same guard — catches redirects / runtime-resolved hosts the static guard can't see, and records bodies so the validator corroborates against the real response (stdlib)
+- [x] Phase 2 HTTPS interception (`--proxy-intercept`): mint a per-host leaf cert from an ephemeral CA to terminate client TLS, so HTTPS response bodies feed the validator too — scope-checked first, optional `cryptography` dep, graceful fallback to tunnelling
 - [x] Agent-level red-team harness: hostile banners → model → guard, scored on *followed* vs *got through* (runs in CI with a scripted hijacked brain)
 - [x] Midrecon box mode so the agent red-team measures real model following (honest next step exists), not passivity
 - [x] Rules of engagement: risk tiers + approval gate (hold / prompt / lab auto-clear)

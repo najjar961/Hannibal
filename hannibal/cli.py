@@ -50,7 +50,8 @@ def cmd_run(a: argparse.Namespace) -> int:
         workers=a.workers, max_rounds=a.max_rounds, max_seconds=a.max_seconds,
         max_tokens=a.max_tokens, max_commands=a.max_commands,
         execute=a.execute, workdir=a.workdir, semantic=a.semantic,
-        max_auto_tier=a.max_auto_tier, approval=a.approve, proxy=a.proxy,
+        max_auto_tier=a.max_auto_tier, approval=a.approve,
+        proxy=a.proxy or a.proxy_intercept, proxy_intercept=a.proxy_intercept,
     )
     if not cfg.scope:
         print("error: --scope is required (the authorized targets)", file=sys.stderr)
@@ -73,7 +74,7 @@ def cmd_watch(a: argparse.Namespace) -> int:
         backend=a.backend, model=a.model, base_url=a.base_url,
         api_key=a.api_key or "", workers=a.workers, execute=a.execute,
         workdir=a.workdir, max_auto_tier=a.max_auto_tier, approval=a.approve,
-        proxy=a.proxy,
+        proxy=a.proxy or a.proxy_intercept, proxy_intercept=a.proxy_intercept,
     )
     if not cfg.scope:
         print("error: --scope is required (the authorized targets)", file=sys.stderr)
@@ -213,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "runtime egress (redirects, resolved hosts) is enforced "
                         "on the wire too; records bodies for validation "
                         "(effective with --execute)")
+    r.add_argument("--proxy-intercept", action="store_true",
+                   help="also MITM HTTPS (mint a leaf cert per host) so HTTPS "
+                        "bodies are captured for validation; implies --proxy and "
+                        "needs the 'cryptography' package (falls back to "
+                        "tunnelling without it)")
     r.add_argument("--max-auto-tier", type=int, default=1, choices=[1, 2],
                    help="highest risk tier that runs without a human: "
                         "1 = recon only (default), 2 = attack wraiths too "
@@ -243,6 +249,9 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--proxy", action="store_true",
                    help="route HTTP tools through an in-process scope proxy "
                         "(runtime egress backstop; effective with --execute)")
+    w.add_argument("--proxy-intercept", action="store_true",
+                   help="also MITM HTTPS so HTTPS bodies are captured; implies "
+                        "--proxy, needs 'cryptography'")
     w.add_argument("--max-auto-tier", type=int, default=1, choices=[1, 2],
                    help="1 = recon only (default), 2 = attack wraiths too "
                         "(only for your own isolated lab)")

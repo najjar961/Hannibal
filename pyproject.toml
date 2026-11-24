@@ -22,6 +22,12 @@ classifiers = [
 ]
 dependencies = []   # standard library only
 
+[project.optional-dependencies]
+# Phase-2 HTTPS interception (`--proxy-intercept`) mints X.509 leaf certs, which
+# the stdlib can't do. Everything else — the core tool and Phase-1 proxy — stays
+# dependency-free. Install with: pip install hannibal-recon[intercept]
+intercept = ["cryptography>=41"]
+
 [project.urls]
 Homepage = "https://github.com/najjar961/Hannibal"
 Repository = "https://github.com/najjar961/Hannibal"

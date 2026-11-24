@@ -217,16 +217,31 @@ class Orchestrator:
         # destinations they actually reach (after redirects / DNS) are enforced
         # on the wire, below the static guard. Only meaningful with real traffic.
         if cfg.proxy and cfg.execute:
+            ca = None
+            if cfg.proxy_intercept:
+                from .tls_intercept import make_ca
+                ca = make_ca(cfg.workdir)
+                if ca is None:
+                    self.audit.record("proxy_intercept_unavailable")
+                    self._log("  ⚠ --proxy-intercept needs the 'cryptography' "
+                              "package; falling back to tunnelling (HTTPS bodies "
+                              "not captured). pip install cryptography")
             self.proxy = ScopeProxy(
                 self.scope.why_out_of_scope,
                 scan=lambda body: scan(body).suspicious,
                 on_block=lambda host, reason, kind: self.audit.record(
                     "proxy_blocked", host=host, reason=reason, kind=kind,
                     control="proxy"),
+                ca=ca,
             ).start()
-            self.audit.record("proxy_start", address=self.proxy.address)
+            self.audit.record("proxy_start", address=self.proxy.address,
+                              intercept=bool(ca))
+            mode = "TLS-intercepting" if ca else "tunnelling"
             self._log(f"  ⛨ scope proxy on {self.proxy.address} — "
-                      f"runtime egress backstop active")
+                      f"runtime egress backstop active ({mode})")
+            if ca is not None and ca.ca_cert_path:
+                self._log(f"     CA → {ca.ca_cert_path}  (PD scanners skip TLS "
+                          f"verify; trust this for verifying clients)")
 
         while True:
             stop = self.budget.check()

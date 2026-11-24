@@ -30,12 +30,14 @@ HTTP.
 from __future__ import annotations
 
 import http.client
+import io
 import select
 import socket
+import ssl
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlsplit
 
 # A scope check: returns None if the host is in scope, else a reason string.
@@ -129,7 +131,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             pass
         self.close_connection = True
 
-    # -- HTTPS: enforce the host, tunnel the bytes (no TLS interception) -----
+    # -- HTTPS: enforce the host; tunnel (Phase 1) or intercept (Phase 2) ----
     def do_CONNECT(self) -> None:
         host = self.path.rsplit(":", 1)[0].strip("[]")
         reason = self._ctx.scope_check(host)
@@ -140,6 +142,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             port = int(self.path.rsplit(":", 1)[1])
         except (ValueError, IndexError):
             port = 443
+
+        # Phase 2: terminate the client's TLS, read the decrypted HTTP, forward
+        # over our own TLS to the real upstream — so HTTPS bodies are captured.
+        # Only reached for an in-scope host, and only when a CA is configured.
+        if self._ctx.ca is not None:
+            self._intercept(host, port)
+            return
+
+        # Phase 1: enforce the destination, then tunnel the opaque bytes.
         try:
             upstream = socket.create_connection((host, port), timeout=self._ctx.timeout)
         except OSError as e:
@@ -153,6 +164,36 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             return
         self._tunnel(self.connection, upstream)
         self.close_connection = True
+
+    def _intercept(self, host: str, port: int) -> None:
+        """Man-in-the-middle an in-scope HTTPS CONNECT so the body is visible."""
+        try:
+            self.send_response(200, "Connection established")
+            self.end_headers()
+            self.wfile.flush()
+        except OSError:
+            self.close_connection = True
+            return
+        try:
+            server_ctx = self._ctx.ca.context_for(host)
+            tls_client = server_ctx.wrap_socket(self.connection, server_side=True)
+        except (OSError, ssl.SSLError):
+            # a client that refuses our leaf (e.g. strict pinning) just fails
+            # closed — nothing left scope, and nothing was captured
+            self.close_connection = True
+            return
+        try:
+            self._ctx._serve_decrypted(tls_client, host, port)
+        finally:
+            try:
+                tls_client.close()
+            except OSError:
+                pass
+            # the raw socket is now spent; hand the outer handler inert buffers
+            # so its finish() can't write to a closed TLS socket
+            self.rfile = io.BytesIO()
+            self.wfile = io.BytesIO()
+            self.close_connection = True
 
     def _tunnel(self, client: socket.socket, upstream: socket.socket) -> None:
         """Pump bytes both ways until either side closes. The payload is opaque
@@ -243,6 +284,103 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     do_DELETE = do_OPTIONS = do_PATCH = _proxy_http
 
 
+class _DecryptedServer:
+    """A minimal stand-in for an HTTPServer, carrying the context an
+    _InterceptHandler needs for one intercepted CONNECT (its proxy, and the
+    authoritative host/port the client connected to)."""
+
+    def __init__(self, proxy: "ScopeProxy", host: str, port: int):
+        self.proxy = proxy
+        self.host = host
+        self.port = port
+
+
+class _InterceptHandler(BaseHTTPRequestHandler):
+    """Handles the plaintext HTTP requests inside an intercepted TLS tunnel.
+
+    Requests here are origin-form (`GET /path`), so the URL is rebuilt from the
+    CONNECT host (authoritative — not the client's Host header) and forwarded to
+    the real upstream over TLS. Supports keep-alive, so a scanner reusing the
+    connection for many requests is captured in full."""
+
+    protocol_version = "HTTP/1.1"
+
+    @property
+    def _p(self) -> "ScopeProxy":
+        return self.server.proxy          # type: ignore[attr-defined]
+
+    def log_message(self, *args) -> None:
+        return
+
+    def _deny(self, reason: str) -> None:
+        host = self.server.host           # type: ignore[attr-defined]
+        self._p.transcript.record_block(Blocked(host, reason, "https"))
+        self._p._fire_block(host, reason, "https")
+        body = (f"blocked by Hannibal scope guard: {reason}").encode("utf-8", "replace")
+        try:
+            self.send_response(403)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            pass
+        self.close_connection = True
+
+    def _handle(self) -> None:
+        host = self.server.host           # type: ignore[attr-defined]
+        port = self.server.port           # type: ignore[attr-defined]
+        # defence in depth: the CONNECT host was scope-checked, but re-check
+        reason = self._p.scope_check(host)
+        if reason is not None:
+            self._deny(reason)
+            return
+        path = self.path or "/"
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        req_body = self.rfile.read(length) if length else None
+        headers = {k: v for k, v in self.headers.items()
+                   if k.lower() not in ("proxy-connection", "connection")}
+
+        conn = None
+        try:
+            up_ctx = ssl._create_unverified_context()   # labs use self-signed
+            conn = http.client.HTTPSConnection(
+                host, port, timeout=self._p.timeout, context=up_ctx)
+            conn.request(self.command, path, body=req_body, headers=headers)
+            resp = conn.getresponse()
+            raw = resp.read()
+        except OSError as e:
+            self._deny(f"upstream error: {e}")
+            if conn is not None:
+                conn.close()
+            return
+
+        text = raw.decode("utf-8", "replace")
+        shown = "" if port == 443 else f":{port}"
+        url = f"https://{host}{shown}{path}"
+        suspicious = bool(self._p.scan(text)) if self._p.scan else False
+        self._p.transcript.record_exchange(
+            Exchange(url, resp.status, text[:_MAX_BODY], suspicious))
+
+        try:
+            self.send_response(resp.status)
+            for k, v in resp.getheaders():
+                if k.lower() in ("transfer-encoding", "connection", "content-length"):
+                    continue
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    do_GET = do_POST = do_HEAD = do_PUT = _handle
+    do_DELETE = do_OPTIONS = do_PATCH = _handle
+
+
 class ScopeProxy:
     """A running forward proxy that enforces scope on every connection.
 
@@ -259,11 +397,16 @@ class ScopeProxy:
     def __init__(self, scope_check: ScopeCheck, *,
                  scan: Optional[BodyScan] = None,
                  on_block: Optional[BlockHook] = None,
+                 ca: Optional[Any] = None,
                  host: str = "127.0.0.1", port: int = 0,
                  timeout: float = 30.0):
         self.scope_check = scope_check
         self.scan = scan
         self._on_block = on_block
+        # a CertAuthority (tls_intercept.CertAuthority) enables Phase-2 HTTPS
+        # interception; None keeps Phase-1 tunnelling. Duck-typed so this module
+        # never imports the optional `cryptography`-backed code.
+        self.ca = ca
         self.timeout = timeout
         self.transcript = Transcript()
         self._server = ThreadingHTTPServer((host, port), _ProxyHandler)
@@ -278,6 +421,18 @@ class ScopeProxy:
             self._on_block(host, reason, kind)
         except Exception:
             pass   # a failing audit hook must never crash a worker
+
+    def _serve_decrypted(self, tls_sock: socket.socket, host: str,
+                         port: int) -> None:
+        """Drive the decrypted HTTP conversation inside an intercepted CONNECT:
+        read each request off the client's TLS socket, forward it to the real
+        upstream over our own TLS, record the exchange, relay the response back.
+        Runs in the worker thread that owns this connection."""
+        shim = _DecryptedServer(self, host, port)
+        try:
+            _InterceptHandler(tls_sock, (host, port), shim)
+        except (OSError, ssl.SSLError):
+            pass
 
     @property
     def address(self) -> str:
