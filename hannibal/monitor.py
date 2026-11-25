@@ -311,9 +311,48 @@ class MonitorCycle:
     resolved: int
 
 
+def _interruptible_sleep(interval: float,
+                         should_stop: Optional[Callable[[], bool]],
+                         sleep: Callable[[float], None]) -> None:
+    """Sleep up to ``interval`` seconds, waking early if a stop is requested.
+
+    A daemon on a long interval must still react to a shutdown signal promptly,
+    so the wait is broken into short slices that re-check ``should_stop``.
+    """
+    if should_stop is None:
+        sleep(interval)
+        return
+    remaining = interval
+    while remaining > 0 and not should_stop():
+        slice_ = min(1.0, remaining)
+        sleep(slice_)
+        remaining -= slice_
+
+
+def _write_heartbeat(path: str, run: int, ts: float,
+                     total: int, new: int, resolved: int) -> None:
+    """Write a tiny liveness/status file after each run (best-effort).
+
+    Lets an operator — or another monitor — confirm the daemon is alive and see
+    when it last completed a pass, without parsing logs.
+    """
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+    payload = {
+        "pid": os.getpid(), "run": run, "ts": ts,
+        "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)),
+        "total": total, "new": new, "resolved": resolved,
+    }
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+    os.replace(tmp, path)
+
+
 def run_monitor(cfg: RunConfig, state_path: str, sinks: AlertSink,
                 cycles: int = 0, interval: float = 0.0,
-                injector=None,
+                injector=None, should_stop: Optional[Callable[[], bool]] = None,
+                heartbeat_path: str = "",
                 now: Callable[[], float] = time.time,
                 sleep: Callable[[float], None] = time.sleep,
                 log: Callable[[str], None] = print) -> List[MonitorCycle]:
@@ -330,6 +369,9 @@ def run_monitor(cfg: RunConfig, state_path: str, sinks: AlertSink,
     c = 0
     try:
         while cycles <= 0 or c < cycles:
+            if should_stop is not None and should_stop():
+                log("stopping — shutdown requested")
+                break
             c += 1
             run = state.next_run()
             if injector is not None:
@@ -360,9 +402,14 @@ def run_monitor(cfg: RunConfig, state_path: str, sinks: AlertSink,
                 f"{len(changes.new)} new, {len(changes.resolved)} resolved")
             out.append(MonitorCycle(run, len(findings), len(changes.new),
                                     len(changes.resolved)))
+            if heartbeat_path:
+                _write_heartbeat(heartbeat_path, run, ts, len(findings),
+                                 len(changes.new), len(changes.resolved))
 
+            if should_stop is not None and should_stop():
+                break
             if interval and (cycles <= 0 or c < cycles):
-                sleep(interval)
+                _interruptible_sleep(interval, should_stop, sleep)
     except KeyboardInterrupt:  # pragma: no cover - interactive
         log("\nstopped.")
     finally:
