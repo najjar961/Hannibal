@@ -1,0 +1,49 @@
+# systemd unit for the Hannibal continuous monitor.
+#
+# Install:
+#   sudo useradd --system --home /opt/hannibal --shell /usr/sbin/nologin hannibal
+#   sudo mkdir -p /var/lib/hannibal /var/log/hannibal
+#   sudo chown hannibal:hannibal /var/lib/hannibal /var/log/hannibal
+#   sudo cp deploy/hannibal-monitor.service /etc/systemd/system/
+#   # edit --scope below to YOUR authorized targets, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now hannibal-monitor
+#   journalctl -u hannibal-monitor -f        # watch it
+#   cat /var/lib/hannibal/heartbeat.json      # liveness/status
+#
+# Only ever point --scope at systems you own or are explicitly authorized to
+# test. Recon tier only (default); attack tier stays off here on purpose.
+
+[Unit]
+Description=Hannibal continuous monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hannibal
+WorkingDirectory=/opt/hannibal
+ExecStart=/usr/bin/hannibal monitor \
+    --scope 10.0.0.0/24 \
+    --interval 3600 \
+    --state /var/lib/hannibal/state.sqlite \
+    --alerts-file /var/lib/hannibal/alerts.jsonl \
+    --heartbeat /var/lib/hannibal/heartbeat.json \
+    --log-file /var/log/hannibal/monitor.log
+
+# Graceful shutdown: SIGTERM lets the in-flight run finish and the baseline
+# flush before exit; give it room before SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=300
+Restart=on-failure
+RestartSec=10
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/hannibal /var/log/hannibal
+
+[Install]
+WantedBy=multi-user.target

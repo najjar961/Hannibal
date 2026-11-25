@@ -99,8 +99,9 @@ def cmd_watch(a: argparse.Namespace) -> int:
 
 
 def cmd_monitor(a: argparse.Namespace) -> int:
-    from .monitor import (run_monitor, MonitorState, ConsoleSink, JsonlSink,
+    from .monitor import (MonitorState, ConsoleSink, JsonlSink,
                           WebhookSink, MultiSink)
+    from .service import serve, make_logger
     from .watch import demo_injector
     cfg = RunConfig(
         objective="continuously map and attack the scope", scope=_split(a.scope),
@@ -117,11 +118,12 @@ def cmd_monitor(a: argparse.Namespace) -> int:
         return 2
     injector = demo_injector() if a.demo else None
 
-    sinks = [ConsoleSink()]
+    logger = make_logger(a.log_file)
+    sinks = [ConsoleSink(logger)]
     if a.alerts_file:
         sinks.append(JsonlSink(a.alerts_file))
     if a.webhook:
-        sinks.append(WebhookSink(a.webhook))
+        sinks.append(WebhookSink(a.webhook, log=logger))
 
     if a.execute:
         print("⚠  EXECUTE mode: real tools will run against the scope above, "
@@ -141,11 +143,9 @@ def cmd_monitor(a: argparse.Namespace) -> int:
     else:
         print("   first run — establishing a baseline; everything found "
               "counts as new\n")
-    try:
-        run_monitor(cfg, a.state, MultiSink(sinks), cycles=a.cycles,
-                    interval=a.interval, injector=injector)
-    except KeyboardInterrupt:
-        print("\nstopped.")
+    serve(cfg, a.state, MultiSink(sinks), interval=a.interval, cycles=a.cycles,
+          injector=injector, heartbeat_path=a.heartbeat, log_file=a.log_file,
+          log=logger)
     return 0
 
 
@@ -318,6 +318,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="run real recon tools against the scope each run")
     m.add_argument("--max-auto-tier", type=int, default=1, choices=[1, 2])
     m.add_argument("--approve", default="deny", choices=["deny", "prompt"])
+    m.add_argument("--log-file", default="",
+                   help="append timestamped service logs to this file")
+    m.add_argument("--heartbeat", default="",
+                   help="write a liveness/status JSON here after each run")
     m.add_argument("--workdir", default="hannibal_monitor",
                    help="scratch dir for per-run campaign data")
     m.set_defaults(func=cmd_monitor)
