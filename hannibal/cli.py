@@ -98,6 +98,57 @@ def cmd_watch(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_monitor(a: argparse.Namespace) -> int:
+    from .monitor import (run_monitor, MonitorState, ConsoleSink, JsonlSink,
+                          WebhookSink, MultiSink)
+    from .watch import demo_injector
+    cfg = RunConfig(
+        objective="continuously map and attack the scope", scope=_split(a.scope),
+        backend=a.backend, model=a.model, base_url=a.base_url,
+        api_key=a.api_key or "", workers=a.workers, execute=a.execute,
+        workdir=a.workdir, max_auto_tier=a.max_auto_tier, approval=a.approve,
+    )
+    if not cfg.scope:
+        print("error: --scope is required (the authorized targets)", file=sys.stderr)
+        return 2
+    if a.demo and a.execute:
+        print("error: --demo mutates the simulated lab; it cannot be used with "
+              "--execute", file=sys.stderr)
+        return 2
+    injector = demo_injector() if a.demo else None
+
+    sinks = [ConsoleSink()]
+    if a.alerts_file:
+        sinks.append(JsonlSink(a.alerts_file))
+    if a.webhook:
+        sinks.append(WebhookSink(a.webhook))
+
+    if a.execute:
+        print("⚠  EXECUTE mode: real tools will run against the scope above, "
+              "every run.")
+        print("   Only proceed on systems you own or are authorized to test.\n")
+
+    prior = MonitorState(a.state)
+    seen = prior.run_count()
+    prior.close()
+    forever = a.cycles <= 0
+    print(f"◉  monitor: state={a.state}, "
+          f"{'until interrupted' if forever else f'{a.cycles} run(s)'}, "
+          f"interval {a.interval}s")
+    if seen:
+        print(f"   resuming — {seen} prior run(s) on record; only changes "
+              f"since then will alert\n")
+    else:
+        print("   first run — establishing a baseline; everything found "
+              "counts as new\n")
+    try:
+        run_monitor(cfg, a.state, MultiSink(sinks), cycles=a.cycles,
+                    interval=a.interval, injector=injector)
+    except KeyboardInterrupt:
+        print("\nstopped.")
+    return 0
+
+
 def cmd_eval(a: argparse.Namespace) -> int:
     import json
     from .eval import run_eval, append_history, render
@@ -240,6 +291,36 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--approve", default="deny", choices=["deny", "prompt"])
     w.add_argument("--workdir", default="hannibal_watch")
     w.set_defaults(func=cmd_watch)
+
+    m = sub.add_parser("monitor",
+                       help="continuous monitoring: persist a baseline across "
+                            "runs and alert only on new findings")
+    m.add_argument("-s", "--scope", required=True,
+                   help="comma-separated authorized hosts / CIDRs")
+    m.add_argument("--state", default="hannibal_monitor/state.sqlite",
+                   help="persistent baseline file (survives restarts)")
+    m.add_argument("--cycles", type=int, default=0,
+                   help="number of runs (0 = until interrupted)")
+    m.add_argument("--interval", type=float, default=0.0,
+                   help="seconds to sleep between runs")
+    m.add_argument("--alerts-file", default="",
+                   help="append new/resolved findings as JSON lines to this file")
+    m.add_argument("--webhook", default="",
+                   help="POST each change to this URL (Slack/Discord/Teams/generic)")
+    m.add_argument("--demo", action="store_true",
+                   help="drive the simulated lab and inject changes over time")
+    m.add_argument("--backend", default="mock", choices=["mock", "ollama", "openai"])
+    m.add_argument("--model", default="qwen3:8b")
+    m.add_argument("--base-url", default="http://localhost:11434/v1")
+    m.add_argument("--api-key", default="")
+    m.add_argument("--workers", type=int, default=4)
+    m.add_argument("--execute", action="store_true",
+                   help="run real recon tools against the scope each run")
+    m.add_argument("--max-auto-tier", type=int, default=1, choices=[1, 2])
+    m.add_argument("--approve", default="deny", choices=["deny", "prompt"])
+    m.add_argument("--workdir", default="hannibal_monitor",
+                   help="scratch dir for per-run campaign data")
+    m.set_defaults(func=cmd_monitor)
 
     e = sub.add_parser("eval", help="score the full pipeline against lab ground truth")
     e.add_argument("--backend", default="mock", choices=["mock", "ollama", "openai"])
